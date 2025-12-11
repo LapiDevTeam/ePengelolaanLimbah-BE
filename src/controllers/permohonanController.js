@@ -295,8 +295,15 @@ const getAllPermohonan = async (req, res) => {
       if (column) {
         // Search in a specific column
         if (column === 'tanggal') {
-          // submitted_at is a DATE/TIMESTAMP column - cast to text for iLike
-          whereClause = Sequelize.where(Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.submitted_at'), 'text'), searchCondition);
+          // Support multiple date formats: YYYY-MM-DD, DD/MM/YY, DD/MM/YYYY, DD-MM-YYYY
+          // First format as YYYY-MM-DD, then also try DD/MM/YYYY format
+          const orConditions = [
+            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'YYYY-MM-DD'), searchCondition),
+            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YYYY'), searchCondition),
+            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YY'), searchCondition),
+            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD-MM-YYYY'), searchCondition)
+          ];
+          whereClause = { [Op.or]: orConditions };
         } else {
           const columnMap = {
             'noPermohonan': 'nomor_permohonan',
@@ -315,7 +322,7 @@ const getAllPermohonan = async (req, res) => {
           }
         }
       } else {
-        // Search across all relevant columns. Cast submitted_at to text to avoid type errors.
+        // Search across all relevant columns. For tanggal, support multiple formats
         const orConditions = [
           { nomor_permohonan: searchCondition },
           // status is an enum column in Postgres - cast to text for ILIKE
@@ -323,7 +330,11 @@ const getAllPermohonan = async (req, res) => {
           { bagian: searchCondition },
           { '$GolonganLimbah.nama$': searchCondition },
           { '$JenisLimbahB3.nama$': searchCondition },
-          Sequelize.where(Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.submitted_at'), 'text'), searchCondition)
+          // For tanggal, support multiple formats: YYYY-MM-DD, DD/MM/YYYY, DD/MM/YY, DD-MM-YYYY
+          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'YYYY-MM-DD'), searchCondition),
+          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YYYY'), searchCondition),
+          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YY'), searchCondition),
+          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD-MM-YYYY'), searchCondition)
         ];
 
         whereClause[Op.or] = orConditions;
@@ -375,7 +386,18 @@ const getAllPermohonan = async (req, res) => {
       });
 
       // Exclude requests created by the same user
-      queryOptions.where.requester_id = { [Op.ne]: filteringUser.log_NIK };
+      // Merge with existing whereClause if it exists (from search filters)
+      if (Object.keys(queryOptions.where).length > 0) {
+        // Combine with existing conditions using Op.and
+        queryOptions.where = {
+          [Op.and]: [
+            queryOptions.where,
+            { requester_id: { [Op.ne]: filteringUser.log_NIK } }
+          ]
+        };
+      } else {
+        queryOptions.where.requester_id = { [Op.ne]: filteringUser.log_NIK };
+      }
       
       // Add CurrentStep for post-processing check
       if (!queryOptions.include.some(inc => inc.as === 'CurrentStep')) {
@@ -642,49 +664,56 @@ const getAllPermohonan = async (req, res) => {
       // Approved: show ALL requests where user has approved OR rejected at their step
       // EXCEPT if current step also needs user's approval but hasn't been processed yet
       // (in that case, it should be in Pending Approvals instead)
+      // NOTE: Search filters have already been applied at the database level
       
-      // Need to fetch user's approval authority to check current step
-      try {
-        const axios = require('axios');
-        const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
-        const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
-        const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
-        const appItems = items.filter(i => String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah');
-        const userApprovals = appItems.filter(item => item.Appr_ID === filteringUser.log_NIK);
-        const userApprovalSteps = userApprovals.map(item => item.Appr_No).filter(stepNo => stepNo != null);
-        
-        filteredList = filteredList.filter(request => {
-          // If no current step (completed/rejected), always show in Processed
-          if (!request.current_step_id || !request.CurrentStep) {
-            return true;
-          }
+      if (filteredList.length === 0) {
+        filteredCount = 0;
+      } else {
+        // Need to fetch user's approval authority to check current step
+        // to exclude requests where user still needs to process at current step
+        try {
+          const axios = require('axios');
+          const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
+          const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
+          const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
+          const appItems = items.filter(i => String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah');
+          const userApprovals = appItems.filter(item => item.Appr_ID === filteringUser.log_NIK);
+          const userApprovalSteps = userApprovals.map(item => item.Appr_No).filter(stepNo => stepNo != null);
           
-          const currentStepLevel = request.CurrentStep.step_level;
-          
-          // If current step is not in user's approval authority, show in Processed
-          if (!userApprovalSteps.includes(currentStepLevel)) {
-            return true;
-          }
-          
-          // Current step needs user's approval - check if already processed (approved or rejected)
-          const histories = Array.isArray(request.ApprovalHistories) ? request.ApprovalHistories : [];
-          const hasProcessedCurrentStep = histories.some(h => {
-            const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
-            const matchesUser = approverIds.includes(String(filteringUser.log_NIK));
-            const isProcessed = ['Approved', 'Rejected'].includes(h.status);
-            const matchesCurrentStep = String(h.step_id) === String(request.current_step_id);
-            return matchesUser && isProcessed && matchesCurrentStep;
+          filteredList = filteredList.filter(request => {
+            // If no current step (completed/rejected), always show in Processed
+            if (!request.current_step_id || !request.CurrentStep) {
+              return true;
+            }
+            
+            const currentStepLevel = request.CurrentStep.step_level;
+            
+            // If current step is not in user's approval authority, show in Processed
+            if (!userApprovalSteps.includes(currentStepLevel)) {
+              return true;
+            }
+            
+            // Current step needs user's approval - check if already processed (approved or rejected)
+            const histories = Array.isArray(request.ApprovalHistories) ? request.ApprovalHistories : [];
+            const hasProcessedCurrentStep = histories.some(h => {
+              const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
+              const matchesUser = approverIds.includes(String(filteringUser.log_NIK));
+              const isProcessed = ['Approved', 'Rejected'].includes(h.status);
+              const matchesCurrentStep = String(h.step_id) === String(request.current_step_id);
+              return matchesUser && isProcessed && matchesCurrentStep;
+            });
+            
+            // Only show in Processed if user has already processed current step
+            return hasProcessedCurrentStep;
           });
           
-          // Only show in Processed if user has already processed current step
-          return hasProcessedCurrentStep;
-        });
-        
-        filteredCount = filteredList.length;
-      } catch (apiError) {
-        console.warn('[processedBy filter] External API check failed:', apiError.message);
-        // If API fails, just show all processed requests without filtering
-        filteredCount = filteredList.length;
+          filteredCount = filteredList.length;
+        } catch (apiError) {
+          console.warn('[processedBy filter] External API check failed:', apiError.message);
+          // If API fails, just use the results from database filter
+          // The search filter was already applied at DB level
+          filteredCount = filteredList.length;
+        }
       }
     }
     
