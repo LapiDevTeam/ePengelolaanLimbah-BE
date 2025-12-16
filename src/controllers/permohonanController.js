@@ -310,7 +310,11 @@ const getAllPermohonan = async (req, res) => {
             'golongan': '$GolonganLimbah.nama$',
             'jenis': '$JenisLimbahB3.nama$',
             'status': 'status',
-            'bagian': 'bagian'
+            'bagian': 'bagian',
+            // DetailLimbahs fields
+            'namaLimbah': '$DetailLimbahs.nama_limbah$',
+            'nomorAnalisa': '$DetailLimbahs.nomor_analisa$',
+            'bobot': '$DetailLimbahs.bobot$'
           };
           if (columnMap[column]) {
             if (column === 'status') {
@@ -343,6 +347,10 @@ const getAllPermohonan = async (req, res) => {
           { bagian: searchCondition },
           { '$GolonganLimbah.nama$': searchCondition },
           { '$JenisLimbahB3.nama$': searchCondition },
+          // DetailLimbahs fields
+          { '$DetailLimbahs.nama_limbah$': searchCondition },
+          { '$DetailLimbahs.nomor_analisa$': searchCondition },
+          { '$DetailLimbahs.bobot$': searchCondition },
           // For tanggal, support multiple formats: YYYY-MM-DD, DD/MM/YYYY, DD/MM/YY, DD-MM-YYYY
           Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'YYYY-MM-DD'), { [Op.iLike]: `%${search}%` }),
           Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YYYY'), { [Op.iLike]: `%${search}%` }),
@@ -765,9 +773,22 @@ const getAllPermohonan = async (req, res) => {
     
     const totalPages = Math.ceil(filteredCount / parseInt(limit));
     
+    // Transform response: keep only required fields from DetailLimbahs
+    const transformedList = filteredList.map(item => {
+      const itemData = item.toJSON ? item.toJSON() : item;
+      if (itemData.DetailLimbahs && Array.isArray(itemData.DetailLimbahs)) {
+        itemData.DetailLimbahs = itemData.DetailLimbahs.map(detail => ({
+          nama_limbah: detail.nama_limbah,
+          nomor_analisa: detail.nomor_analisa,
+          bobot: detail.bobot
+        }));
+      }
+      return itemData;
+    });
+    
     res.status(200).json({
       success: true,
-      data: filteredList,
+      data: transformedList,
       pagination: {
         total: filteredCount,
         page: parseInt(page),
