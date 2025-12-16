@@ -295,15 +295,15 @@ const getAllPermohonan = async (req, res) => {
       if (column) {
         // Search in a specific column
         if (column === 'tanggal') {
-          // Support multiple date formats: YYYY-MM-DD, DD/MM/YY, DD/MM/YYYY, DD-MM-YYYY
-          // First format as YYYY-MM-DD, then also try DD/MM/YYYY format
-          const orConditions = [
-            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'YYYY-MM-DD'), searchCondition),
-            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YYYY'), searchCondition),
-            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YY'), searchCondition),
-            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD-MM-YYYY'), searchCondition)
+          // For tanggal search, create OR conditions for multiple date formats
+          // This ensures we match regardless of date format used in the database
+          const dateSearchConditions = [
+            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'YYYY-MM-DD'), { [Op.iLike]: `%${search}%` }),
+            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YYYY'), { [Op.iLike]: `%${search}%` }),
+            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YY'), { [Op.iLike]: `%${search}%` }),
+            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD-MM-YYYY'), { [Op.iLike]: `%${search}%` })
           ];
-          whereClause = { [Op.or]: orConditions };
+          whereClause = { [Op.or]: dateSearchConditions };
         } else {
           const columnMap = {
             'noPermohonan': 'nomor_permohonan',
@@ -314,8 +314,15 @@ const getAllPermohonan = async (req, res) => {
           };
           if (columnMap[column]) {
             if (column === 'status') {
-              // status is an enum type in Postgres - cast to text for ILIKE
-              whereClause = Sequelize.where(Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.status'), 'text'), searchCondition);
+              // Search status from CurrentStep.step_name first (primary), fallback to status enum
+              // COALESCE returns the first non-null value
+              whereClause = Sequelize.where(
+                Sequelize.fn('COALESCE', 
+                  Sequelize.cast(Sequelize.col('"CurrentStep"."step_name"'), 'text'),
+                  Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.status'), 'text')
+                ),
+                searchCondition
+              );
             } else {
               whereClause[columnMap[column]] = searchCondition;
             }
@@ -325,16 +332,22 @@ const getAllPermohonan = async (req, res) => {
         // Search across all relevant columns. For tanggal, support multiple formats
         const orConditions = [
           { nomor_permohonan: searchCondition },
-          // status is an enum column in Postgres - cast to text for ILIKE
-          Sequelize.where(Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.status'), 'text'), searchCondition),
+          // Search status from CurrentStep.step_name first (primary), fallback to status enum
+          Sequelize.where(
+            Sequelize.fn('COALESCE', 
+              Sequelize.cast(Sequelize.col('"CurrentStep"."step_name"'), 'text'),
+              Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.status'), 'text')
+            ),
+            searchCondition
+          ),
           { bagian: searchCondition },
           { '$GolonganLimbah.nama$': searchCondition },
           { '$JenisLimbahB3.nama$': searchCondition },
           // For tanggal, support multiple formats: YYYY-MM-DD, DD/MM/YYYY, DD/MM/YY, DD-MM-YYYY
-          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'YYYY-MM-DD'), searchCondition),
-          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YYYY'), searchCondition),
-          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YY'), searchCondition),
-          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD-MM-YYYY'), searchCondition)
+          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'YYYY-MM-DD'), { [Op.iLike]: `%${search}%` }),
+          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YYYY'), { [Op.iLike]: `%${search}%` }),
+          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YY'), { [Op.iLike]: `%${search}%` }),
+          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD-MM-YYYY'), { [Op.iLike]: `%${search}%` })
         ];
 
         whereClause[Op.or] = orConditions;
@@ -356,7 +369,18 @@ const getAllPermohonan = async (req, res) => {
 
     // Filter by user's own requests if userOnly is specified
     if (userOnly === 'true' || userOnly === true) {
-      queryOptions.where.requester_id = filteringUser.log_NIK;
+      // Merge with existing whereClause if it exists (from search filters)
+      if (Object.keys(queryOptions.where).length > 0) {
+        // Combine with existing conditions using Op.and
+        queryOptions.where = {
+          [Op.and]: [
+            queryOptions.where,
+            { requester_id: filteringUser.log_NIK }
+          ]
+        };
+      } else {
+        queryOptions.where.requester_id = filteringUser.log_NIK;
+      }
     }
 
     // Filter to requests processed (approved or rejected) by the current user
@@ -417,10 +441,25 @@ const getAllPermohonan = async (req, res) => {
         const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
         
         // Get all requests that are InProgress first
-        queryOptions.where.status = 'InProgress';
-        queryOptions.where.current_step_id = {
-          [require('sequelize').Op.ne]: null
+        // Merge with existing whereClause if it exists (from search filters)
+        const inProgressConditions = {
+          status: 'InProgress',
+          current_step_id: {
+            [require('sequelize').Op.ne]: null
+          }
         };
+        
+        if (Object.keys(queryOptions.where).length > 0) {
+          // Combine with existing search conditions using Op.and
+          queryOptions.where = {
+            [Op.and]: [
+              queryOptions.where,
+              inProgressConditions
+            ]
+          };
+        } else {
+          queryOptions.where = inProgressConditions;
+        }
         
         // Remove existing CurrentStep includes
         queryOptions.include = queryOptions.include.filter(include => 
