@@ -18,6 +18,7 @@ const EXTERNAL_APPROVAL_URL =
   process.env.EXTERNAL_APPROVAL_URL || "http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang";
 
 const { Op } = require("sequelize");
+const Sequelize = require('sequelize');
 
 const jakartaTime = require("../utils/jakartaTime");
 
@@ -598,25 +599,44 @@ const createBeritaAcara = async (req, res) => {
  */
 const getAllBeritaAcara = async (req, res) => {
   try {
-    // Note: Renamed search/column to match frontend component
-    const { page = 1, limit = 8, searchTerm = "", selectedColumn = "" } = req.query;
+    // Accept both naming conventions from frontend
+    const { 
+      page = 1, 
+      limit = 8, 
+      searchTerm = "", 
+      selectedColumn = "",
+      search = "",
+      column = ""
+    } = req.query;
+
+    // Use whichever is provided
+    const searchValue = searchTerm || search;
+    const columnValue = selectedColumn || column;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
+    // Columns yang akan di-filter post-query
+    const postQueryFilterColumns = ['status'];
+    const needsPostQueryFilter = searchValue && columnValue && postQueryFilterColumns.includes(columnValue);
+
     // --- SEARCH LOGIC (Corrected) ---
     const whereClause = {};
-    if (searchTerm && selectedColumn) {
-      const searchCondition = { [Op.iLike]: `%${searchTerm}%` };
+    if (searchValue && columnValue && !needsPostQueryFilter) {
+      const searchCondition = { [Op.iLike]: `%${searchValue}%` };
 
       // Search in a specific column using explicit if-else conditions
-      if (selectedColumn === 'tanggal') {
-        whereClause.tanggal = searchCondition;
-      } else if (selectedColumn === 'bagian') {
+      if (columnValue === 'tanggal') {
+        // tanggal is DATE type, need to cast to text for ILIKE search
+        // Support multiple date formats
+        whereClause[Op.or] = [
+          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('BeritaAcara.tanggal'), 'YYYY-MM-DD'), searchCondition),
+          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('BeritaAcara.tanggal'), 'DD/MM/YYYY'), searchCondition),
+          Sequelize.where(Sequelize.fn('to_char', Sequelize.col('BeritaAcara.tanggal'), 'DD-MM-YYYY'), searchCondition)
+        ];
+      } else if (columnValue === 'bagian') {
         whereClause.bagian = searchCondition;
-      } else if (selectedColumn === 'lokasi_verifikasi') {
+      } else if (columnValue === 'lokasi_verifikasi') {
         whereClause.lokasi_verifikasi = searchCondition;
-      } else if (selectedColumn === 'status') {
-        whereClause.status = searchCondition;
       }
     }
 
@@ -641,12 +661,50 @@ const getAllBeritaAcara = async (req, res) => {
       ],
     };
 
-    const { count, rows: events } = await BeritaAcara.findAndCountAll(queryOptions);
+    // Jika ada post-query filter, remove pagination dulu
+    let queryOptionsForDB = { ...queryOptions };
+    if (needsPostQueryFilter) {
+      delete queryOptionsForDB.limit;
+      delete queryOptionsForDB.offset;
+    }
 
-    const totalPages = Math.ceil(count / parseInt(limit));
+    console.log('[getAllBeritaAcara] Search params:', { searchValue, columnValue, whereClause, needsPostQueryFilter });
+
+    const { count, rows: events } = await BeritaAcara.findAndCountAll(queryOptionsForDB);
+
+    // Post-query filtering untuk status column
+    let filteredEvents = events;
+    let filteredCount = count;
+
+    if (needsPostQueryFilter && columnValue === 'status') {
+      const searchLower = String(searchValue).trim().toLowerCase();
+      filteredEvents = events.filter(event => {
+        const eventData = event.toJSON ? event.toJSON() : event;
+        // Utamakan nama step dari SigningWorkflowStep (singular)
+        if (eventData.SigningWorkflowStep && eventData.SigningWorkflowStep.step_name) {
+          const stepName = String(eventData.SigningWorkflowStep.step_name || '').toLowerCase();
+          if (stepName.includes(searchLower)) return true;
+        }
+
+        // Fallback ke status field
+        const status = (eventData.status || '').toLowerCase();
+        return status.includes(searchLower);
+      });
+      
+      filteredCount = filteredEvents.length;
+    }
+
+    // Apply pagination AFTER post-query filtering
+    if (needsPostQueryFilter && filteredEvents.length > 0) {
+      const startIndex = offset;
+      const endIndex = offset + parseInt(limit);
+      filteredEvents = filteredEvents.slice(startIndex, endIndex);
+    }
+
+    const totalPages = Math.ceil(filteredCount / parseInt(limit));
 
     // --- TRANSFORMATION LOGIC (from your original file) ---
-    const transformed = events.map((ev) => {
+    const transformed = filteredEvents.map((ev) => {
       const e = ev.toJSON ? ev.toJSON() : ev;
       let steps = [];
       if (e.SigningWorkflow && Array.isArray(e.SigningWorkflow.SigningWorkflowSteps)) {
@@ -678,7 +736,7 @@ const getAllBeritaAcara = async (req, res) => {
       success: true,
       data: transformed, // Use the correct variable name
       pagination: {
-        total: count,
+        total: filteredCount,
         page: parseInt(page),
         limit: parseInt(limit),
         totalPages: totalPages,

@@ -288,11 +288,16 @@ const getAllPermohonan = async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
   // --- SEARCH LOGIC ---
+  // Columns that will be filtered post-query (to avoid SQL join issues)
+  const postQueryFilterColumns = ['status', 'namaLimbah', 'nomorAnalisa', 'bobot'];
+  const needsPostQueryFilter = search && column && postQueryFilterColumns.includes(column);
+  
   let whereClause = {};
-    if (search && column) {
+    if (search && column && !needsPostQueryFilter) {
       const searchCondition = { [Op.iLike]: `%${search}%` };
 
       // Search in a specific column using explicit if-else conditions
+      // Only columns that can be safely queried at DB level
       if (column === 'noPermohonan') {
         whereClause.nomor_permohonan = searchCondition;
       } else if (column === 'tanggal') {
@@ -308,27 +313,8 @@ const getAllPermohonan = async (req, res) => {
         whereClause['$GolonganLimbah.nama$'] = searchCondition;
       } else if (column === 'jenis') {
         whereClause['$JenisLimbahB3.nama$'] = searchCondition;
-      } else if (column === 'status') {
-        // Search status from CurrentStep.step_name first (primary), fallback to status enum
-        whereClause = Sequelize.where(
-          Sequelize.fn('COALESCE', 
-            Sequelize.cast(Sequelize.col('"CurrentStep"."step_name"'), 'text'),
-            Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.status'), 'text')
-          ),
-          searchCondition
-        );
       } else if (column === 'bagian') {
         whereClause.bagian = searchCondition;
-      } else if (column === 'namaLimbah') {
-        whereClause['$DetailLimbahs.nama_limbah$'] = searchCondition;
-      } else if (column === 'nomorAnalisa') {
-        whereClause['$DetailLimbahs.nomor_analisa$'] = searchCondition;
-      } else if (column === 'bobot') {
-        // bobot is numeric type, need to cast to text for ILIKE search
-        whereClause = Sequelize.where(
-          Sequelize.cast(Sequelize.col('DetailLimbahs.bobot'), 'text'),
-          searchCondition
-        );
       }
     }
 
@@ -344,7 +330,7 @@ const getAllPermohonan = async (req, res) => {
       order: [['created_at', 'DESC']],
       where: whereClause
     };
-
+    
     // Filter by user's own requests if userOnly is specified
     if (userOnly === 'true' || userOnly === true) {
       // Merge with existing whereClause if it exists (from search filters)
@@ -635,9 +621,9 @@ const getAllPermohonan = async (req, res) => {
       // So we fetch all and filter in memory
     }
 
-    // For processedBy, we need to remove pagination from query and do it after filtering
+    // For processedBy or post-query filters, we need to remove pagination from query and do it after filtering
     // because the filtering logic requires post-processing
-    const needsPostProcessing = (processedBy === 'true' || processedBy === true);
+    const needsPostProcessing = (processedBy === 'true' || processedBy === true) || needsPostQueryFilter;
     let queryOptionsForDB = { ...queryOptions };
     
     if (needsPostProcessing) {
@@ -648,11 +634,42 @@ const getAllPermohonan = async (req, res) => {
 
     const { count, rows: permohonanList } = await PermohonanPemusnahanLimbah.findAndCountAll(queryOptionsForDB);
     
-    // Post-processing filters for both pendingApproval and processedBy
+    // Post-processing filters for pendingApproval, processedBy, and certain column searches
     // Important: For users who approve multiple steps (e.g., HSE Manager on step 1 and 4),
     // we only check current step, not any previous steps they may have approved.
     let filteredList = permohonanList;
     let filteredCount = count;
+    
+    // Apply post-query column filters if needed
+    if (needsPostQueryFilter) {
+      const searchLower = search.toLowerCase();
+      
+      filteredList = filteredList.filter(request => {
+        const itemData = request.toJSON ? request.toJSON() : request;
+        
+        if (column === 'status') {
+          // Check both CurrentStep.step_name and status field
+          const stepName = itemData.CurrentStep?.step_name || '';
+          const status = itemData.status || '';
+          return stepName.toLowerCase().includes(searchLower) || status.toLowerCase().includes(searchLower);
+        } else if (column === 'namaLimbah') {
+          // Search in DetailLimbahs.nama_limbah
+          const details = itemData.DetailLimbahs || [];
+          return details.some(d => (d.nama_limbah || '').toLowerCase().includes(searchLower));
+        } else if (column === 'nomorAnalisa') {
+          // Search in DetailLimbahs.nomor_analisa
+          const details = itemData.DetailLimbahs || [];
+          return details.some(d => (d.nomor_analisa || '').toLowerCase().includes(searchLower));
+        } else if (column === 'bobot') {
+          // Search in DetailLimbahs.bobot (convert to string)
+          const details = itemData.DetailLimbahs || [];
+          return details.some(d => String(d.bobot || '').includes(search));
+        }
+        return true;
+      });
+      
+      filteredCount = filteredList.length;
+    }
     
     if (pendingApproval === 'true' || pendingApproval === true) {
       // Pending: exclude only if user approved CURRENT step
