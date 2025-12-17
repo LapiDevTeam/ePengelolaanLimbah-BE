@@ -605,25 +605,18 @@ const getAllBeritaAcara = async (req, res) => {
 
     // --- SEARCH LOGIC (Corrected) ---
     const whereClause = {};
-    if (searchTerm) {
+    if (searchTerm && selectedColumn) {
       const searchCondition = { [Op.iLike]: `%${searchTerm}%` };
 
-      if (selectedColumn) {
-        const columnMap = {
-          tanggal: "tanggal",
-          bagian: "bagian",
-          lokasi_verifikasi: "lokasi_verifikasi",
-          status: "status",
-        };
-        if (columnMap[selectedColumn]) {
-          whereClause[columnMap[selectedColumn]] = searchCondition;
-        }
-      } else {
-        whereClause[Op.or] = [
-          { bagian: searchCondition },
-          { lokasi_verifikasi: searchCondition },
-          { status: searchCondition },
-        ];
+      // Search in a specific column using explicit if-else conditions
+      if (selectedColumn === 'tanggal') {
+        whereClause.tanggal = searchCondition;
+      } else if (selectedColumn === 'bagian') {
+        whereClause.bagian = searchCondition;
+      } else if (selectedColumn === 'lokasi_verifikasi') {
+        whereClause.lokasi_verifikasi = searchCondition;
+      } else if (selectedColumn === 'status') {
+        whereClause.status = searchCondition;
       }
     }
 

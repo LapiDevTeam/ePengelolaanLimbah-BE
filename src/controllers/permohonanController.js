@@ -289,76 +289,46 @@ const getAllPermohonan = async (req, res) => {
 
   // --- SEARCH LOGIC ---
   let whereClause = {};
-    if (search) {
+    if (search && column) {
       const searchCondition = { [Op.iLike]: `%${search}%` };
 
-      if (column) {
-        // Search in a specific column
-        if (column === 'tanggal') {
-          // For tanggal search, create OR conditions for multiple date formats
-          // This ensures we match regardless of date format used in the database
-          const dateSearchConditions = [
-            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'YYYY-MM-DD'), { [Op.iLike]: `%${search}%` }),
-            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YYYY'), { [Op.iLike]: `%${search}%` }),
-            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YY'), { [Op.iLike]: `%${search}%` }),
-            Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD-MM-YYYY'), { [Op.iLike]: `%${search}%` })
-          ];
-          whereClause = { [Op.or]: dateSearchConditions };
-        } else {
-          const columnMap = {
-            'noPermohonan': 'nomor_permohonan',
-            'golongan': '$GolonganLimbah.nama$',
-            'jenis': '$JenisLimbahB3.nama$',
-            'status': 'status',
-            'bagian': 'bagian',
-            // DetailLimbahs fields
-            'namaLimbah': '$DetailLimbahs.nama_limbah$',
-            'nomorAnalisa': '$DetailLimbahs.nomor_analisa$',
-            'bobot': '$DetailLimbahs.bobot$'
-          };
-          if (columnMap[column]) {
-            if (column === 'status') {
-              // Search status from CurrentStep.step_name first (primary), fallback to status enum
-              // COALESCE returns the first non-null value
-              whereClause = Sequelize.where(
-                Sequelize.fn('COALESCE', 
-                  Sequelize.cast(Sequelize.col('"CurrentStep"."step_name"'), 'text'),
-                  Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.status'), 'text')
-                ),
-                searchCondition
-              );
-            } else {
-              whereClause[columnMap[column]] = searchCondition;
-            }
-          }
-        }
-      } else {
-        // Search across all relevant columns. For tanggal, support multiple formats
-        const orConditions = [
-          { nomor_permohonan: searchCondition },
-          // Search status from CurrentStep.step_name first (primary), fallback to status enum
-          Sequelize.where(
-            Sequelize.fn('COALESCE', 
-              Sequelize.cast(Sequelize.col('"CurrentStep"."step_name"'), 'text'),
-              Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.status'), 'text')
-            ),
-            searchCondition
-          ),
-          { bagian: searchCondition },
-          { '$GolonganLimbah.nama$': searchCondition },
-          { '$JenisLimbahB3.nama$': searchCondition },
-          // DetailLimbahs fields
-          { '$DetailLimbahs.nama_limbah$': searchCondition },
-          { '$DetailLimbahs.nomor_analisa$': searchCondition },
-          { '$DetailLimbahs.bobot$': searchCondition },
-          // For tanggal, support multiple formats: YYYY-MM-DD, DD/MM/YYYY, DD/MM/YY, DD-MM-YYYY
+      // Search in a specific column using explicit if-else conditions
+      if (column === 'noPermohonan') {
+        whereClause.nomor_permohonan = searchCondition;
+      } else if (column === 'tanggal') {
+        // For tanggal search, create OR conditions for multiple date formats
+        const dateSearchConditions = [
           Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'YYYY-MM-DD'), { [Op.iLike]: `%${search}%` }),
           Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YYYY'), { [Op.iLike]: `%${search}%` }),
           Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD/MM/YY'), { [Op.iLike]: `%${search}%` }),
           Sequelize.where(Sequelize.fn('to_char', Sequelize.col('PermohonanPemusnahanLimbah.created_at'), 'DD-MM-YYYY'), { [Op.iLike]: `%${search}%` })
         ];
-
-        whereClause[Op.or] = orConditions;
+        whereClause = { [Op.or]: dateSearchConditions };
+      } else if (column === 'golongan') {
+        whereClause['$GolonganLimbah.nama$'] = searchCondition;
+      } else if (column === 'jenis') {
+        whereClause['$JenisLimbahB3.nama$'] = searchCondition;
+      } else if (column === 'status') {
+        // Search status from CurrentStep.step_name first (primary), fallback to status enum
+        whereClause = Sequelize.where(
+          Sequelize.fn('COALESCE', 
+            Sequelize.cast(Sequelize.col('"CurrentStep"."step_name"'), 'text'),
+            Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.status'), 'text')
+          ),
+          searchCondition
+        );
+      } else if (column === 'bagian') {
+        whereClause.bagian = searchCondition;
+      } else if (column === 'namaLimbah') {
+        whereClause['$DetailLimbahs.nama_limbah$'] = searchCondition;
+      } else if (column === 'nomorAnalisa') {
+        whereClause['$DetailLimbahs.nomor_analisa$'] = searchCondition;
+      } else if (column === 'bobot') {
+        // bobot is numeric type, need to cast to text for ILIKE search
+        whereClause = Sequelize.where(
+          Sequelize.cast(Sequelize.col('DetailLimbahs.bobot'), 'text'),
+          searchCondition
+        );
       }
     }
 
