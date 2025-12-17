@@ -1036,9 +1036,178 @@ const generateLogbookExcel = async (req, res) => {
     }
 };
 
+/**
+ * NEW FUNCTION
+ * GET /api/document-generation/permohonan/range/excel?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+ * Generates an Excel file with details of all permohonan within a date range (tanggal_pengajuan).
+ */
+const downloadPermohonanByDateRangeExcel = async (req, res) => {
+    try {
+        const { start_date, end_date } = req.query;
+
+        if (!start_date || !end_date) {
+            return res.status(400).json({ 
+                message: 'start_date and end_date query parameters are required (format: YYYY-MM-DD)' 
+            });
+        }
+
+        // Parse dates and set time boundaries
+        const startDate = new Date(start_date);
+        startDate.setHours(0, 0, 0, 0);
+        
+        const endDate = new Date(end_date);
+        endDate.setHours(23, 59, 59, 999);
+
+        // --- Helper function to format date as DD/MM/YYYY ---
+        const formatDate = (dateString) => {
+            if (!dateString) return '';
+            const date = new Date(dateString);
+            const day = String(date.getDate()).padStart(2, "0");
+            const month = String(date.getMonth() + 1).padStart(2, "0");
+            const year = date.getFullYear();
+            return `${day}/${month}/${year}`;
+        };
+
+        // --- Get permohonan data filtered by tanggal_pengajuan range ---
+        const permohonanList = await PermohonanPemusnahanLimbah.findAll({
+            where: {
+                created_at: {
+                    [require('sequelize').Op.between]: [startDate, endDate]
+                }
+            },
+            include: [
+                { model: DetailLimbah },
+                { model: GolonganLimbah },
+                { model: JenisLimbahB3 },
+                { 
+                    model: ApprovalHistory,
+                    include: [{ model: ApprovalWorkflowStep }],
+                    required: false
+                }
+            ],
+            order: [['created_at', 'DESC']]
+        });
+
+        if (!permohonanList || permohonanList.length === 0) {
+            return res.status(404).json({ 
+                message: 'No permohonan found in the specified date range' 
+            });
+        }
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Lampiran Permohonan');
+
+        // --- Styling ---
+        const headerStyle = {
+            font: { bold: true, color: { argb: 'FFFFFFFF' } },
+            fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF70AD47' } },
+            alignment: { vertical: 'middle', horizontal: 'center', wrapText: true }
+        };
+
+        // --- Define Columns ---
+        worksheet.columns = [
+            { header: 'Bagian', key: 'bagian', width: 12 },
+            { header: 'Tanggal Pengajuan', key: 'tanggal_pengajuan', width: 18 },
+            { header: 'No. Permohonan', key: 'nomor_permohonan', width: 18 },
+            { header: 'Tanggal Pemusnahan', key: 'tanggal_pemusnahan', width: 18 },
+            { header: 'Bentuk Limbah', key: 'bentuk_limbah', width: 12 },
+            { header: 'Golongan Limbah', key: 'golongan_limbah', width: 28 },
+            { header: 'Jenis Limbah', key: 'jenis_limbah', width: 28 },
+            { header: 'Produk Pangan', key: 'is_produk_pangan', width: 12 },
+            { header: 'No. Dokumen', key: 'nomor_referensi', width: 12 },
+            { header: 'Nama Limbah', key: 'nama_limbah', width: 28 },
+            { header: 'No. Bets/Analisa', key: 'nomor_analisa', width: 28 },
+            { header: 'Jumlah Barang', key: 'jumlah_barang', width: 12 },
+            { header: 'Satuan', key: 'satuan', width: 12 },
+            { header: 'No. Wadah', key: 'nomor_wadah', width: 12 },
+            { header: 'Bobot (gram)', key: 'bobot', width: 12, style: { numFmt: '#,##0.00' } },
+            { header: 'Alasan Pemusnahan', key: 'alasan_pemusnahan', width: 28 }
+        ];
+        
+        worksheet.getRow(1).eachCell(cell => {
+            cell.style = headerStyle;
+        });
+
+        // --- Process each permohonan and add rows ---
+        const dataRows = [];
+        
+        permohonanList.forEach(permohonan => {
+            // Get tanggal pemusnahan from verification approval
+            let tanggal_pemusnahan = '';
+            if (permohonan.ApprovalHistories && permohonan.ApprovalHistories.length > 0) {
+                const verificationApprovals = permohonan.ApprovalHistories.filter(
+                    h => h.status === 'Approved' && 
+                         h.decision_date && 
+                         h.approver_jabatan && 
+                         h.approver_jabatan.includes('VERIF_ROLE')
+                );
+                
+                if (verificationApprovals.length > 0) {
+                    const latestVerification = verificationApprovals
+                        .sort((a, b) => new Date(b.decision_date) - new Date(a.decision_date))[0];
+                    tanggal_pemusnahan = formatDate(latestVerification.decision_date);
+                }
+            }
+
+            // Create row for each detail limbah
+            const details = permohonan.DetailLimbahs || [];
+            
+            if (details.length > 0) {
+                details.forEach(detail => {
+                    dataRows.push({
+                        ...detail.toJSON(),
+                        nomor_permohonan: permohonan.nomor_permohonan,
+                        bagian: permohonan.bagian,
+                        tanggal_pengajuan: formatDate(permohonan.created_at),
+                        tanggal_pemusnahan: tanggal_pemusnahan,
+                        bentuk_limbah: permohonan.bentuk_limbah,
+                        golongan_limbah: permohonan.GolonganLimbah?.nama || 'N/A',
+                        jenis_limbah: permohonan.JenisLimbahB3?.nama || 'N/A',
+                        is_produk_pangan: permohonan.is_produk_pangan ? 'Ya' : 'Tidak',
+                        bobot: parseFloat(detail.bobot || 0)
+                    });
+                });
+            } else {
+                // Add row even if no details (for tracking purposes)
+                dataRows.push({
+                    nomor_permohonan: permohonan.nomor_permohonan,
+                    bagian: permohonan.bagian,
+                    tanggal_pengajuan: formatDate(permohonan.created_at),
+                    tanggal_pemusnahan: tanggal_pemusnahan,
+                    bentuk_limbah: permohonan.bentuk_limbah,
+                    golongan_limbah: permohonan.GolonganLimbah?.nama || 'N/A',
+                    jenis_limbah: permohonan.JenisLimbahB3?.nama || 'N/A',
+                    is_produk_pangan: permohonan.is_produk_pangan ? 'Ya' : 'Tidak'
+                });
+            }
+        });
+
+        worksheet.addRows(dataRows);
+
+        // --- Set response headers and send file ---
+        res.setHeader(
+            'Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        );
+        res.setHeader(
+            'Content-Disposition', `attachment; filename="lampiran-permohonan-${start_date}_to_${end_date}.xlsx"`
+        );
+
+        await workbook.xlsx.write(res);
+        res.end();
+
+    } catch (error) {
+        console.error("Error generating permohonan range Excel file:", error);
+        res.status(500).json({ 
+            message: "An error occurred during Excel file generation.", 
+            error: error.message 
+        });
+    }
+};
+
 module.exports = {
     getPermohonanDataForDoc,
     getBeritaAcaraDataForDoc,
     generatePermohonanExcel,
-    generateLogbookExcel
+    generateLogbookExcel,
+    downloadPermohonanByDateRangeExcel
 };

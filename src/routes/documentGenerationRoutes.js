@@ -4,7 +4,8 @@ const {
     getPermohonanDataForDoc, 
     getBeritaAcaraDataForDoc,
     generatePermohonanExcel,
-    generateLogbookExcel
+    generateLogbookExcel,
+    downloadPermohonanByDateRangeExcel
 } = require('../controllers/documentGenerationController');
 const PrintController = require('../controllers/printController');
 const authMiddleware = require('../middleware/authMiddleware');
@@ -35,6 +36,12 @@ router.get('/print-permohonan-pemusnahan', PrintController.printPermohonanPemusn
  * The new endpoint for printing the 'Berita Acara Pemusnahan' document.
  */
 router.get('/print-berita-acara-pemusnahan', PrintController.printBeritaAcaraPemusnahan);
+
+/**
+ * GET /api/document-generation/permohonan/range/excel?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+ * Generates an Excel file with details of all permohonan within a date range (tanggal_pengajuan).
+ */
+router.get('/permohonan/range/excel', downloadPermohonanByDateRangeExcel);
 
 /**
  * GET /api/document-generation/permohonan/:id/excel
