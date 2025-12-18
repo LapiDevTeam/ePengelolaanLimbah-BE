@@ -732,21 +732,26 @@ const generateLogbookExcel = async (req, res) => {
             return '';
         };
 
-        // --- Group permohonan by jenis limbah ---
+        // --- Group permohonan by kode (first token of jenis limbah name) ---
         const groupedData = {};
         
         permohonanData.forEach(permohonan => {
-            const jenisLimbah = permohonan.JenisLimbahB3?.nama || 'Tidak Diketahui';
-            
-            if (!groupedData[jenisLimbah]) {
-                groupedData[jenisLimbah] = [];
+            const jenisLimbahRaw = permohonan.JenisLimbahB3?.nama || 'Tidak Diketahui';
+            // Extract kode as the first word/token. Example: "A336-1 Produk kembalian" -> kode "A336-1"
+            const kodeMatch = jenisLimbahRaw.match(/^(\S+)/);
+            const groupKey = kodeMatch ? kodeMatch[1] : jenisLimbahRaw;
+            // For Lain-lain, keep as a single bucket
+            const safeGroupKey = groupKey === 'Lain-lain' ? 'Lain-lain' : groupKey;
+
+            if (!groupedData[safeGroupKey]) {
+                groupedData[safeGroupKey] = [];
             }
             
             const bobotTotal = permohonan.DetailLimbahs?.reduce((sum, detail) => {
                 return sum + (parseFloat(detail.bobot || 0) / 1000);
             }, 0) || 0;
             
-            groupedData[jenisLimbah].push({
+            groupedData[safeGroupKey].push({
                 tanggal_pemusnahan: getVerificationDate(permohonan),
                 no_permohonan: permohonan.nomor_permohonan,
                 jumlah_kg: bobotTotal,
@@ -793,21 +798,11 @@ const generateLogbookExcel = async (req, res) => {
         let totalBobot = 0;
         let sheetIndex = 1;
 
-        Object.keys(groupedData).forEach((jenisLimbah) => {
-            const data = groupedData[jenisLimbah];
+        Object.keys(groupedData).forEach((groupKey) => {
+            const data = groupedData[groupKey];
             
-            // Extract jenis limbah name without kode for sheet name
-            let sheetDisplayName = jenisLimbah;
-            const sheetKodeMatch = jenisLimbah.match(/^([A-B]\d{3}d?-?\d*)\s+(.+)$/);
-            if (sheetKodeMatch) {
-                sheetDisplayName = sheetKodeMatch[2]; // Use the name part without kode
-            } else {
-                const sheetFallbackMatch = jenisLimbah.match(/^([A-B]\d{2,3}[a-z]?-?\d*)\s+(.+)$/);
-                if (sheetFallbackMatch) {
-                    sheetDisplayName = sheetFallbackMatch[2];
-                }
-            }
-            
+            // Sheet name uses kode (or Lain-lain)
+            const sheetDisplayName = groupKey;
             // Create worksheet for this jenis limbah (sanitize sheet name)
             const sanitizedSheetName = sheetDisplayName.replace(/[\\\/\[\]:\*\?]/g, '').substring(0, 31);
             const worksheet = workbook.addWorksheet(sanitizedSheetName);
@@ -871,32 +866,14 @@ const generateLogbookExcel = async (req, res) => {
 
             // Extract kode and jenis limbah name from the database value
             // Format in database: "A336-1 Bahan Baku" -> kode: "A336-1", jenis: "Bahan Baku"
-            let kode = '';
-            let jenisLimbahName = jenisLimbah;
-            
-            // Check if jenisLimbah contains a kode pattern (like "A336-1" at the beginning)
-            const kodeMatch = jenisLimbah.match(/^([A-B]\d{3}d?-?\d*)\s+(.+)$/);
-            if (kodeMatch) {
-                kode = kodeMatch[1]; // Extract the kode part
-                jenisLimbahName = kodeMatch[2]; // Extract the name part
-            } else {
-                // Fallback: try to extract any pattern with letters, numbers, and dash at the beginning
-                const fallbackMatch = jenisLimbah.match(/^([A-B]\d{2,3}[a-z]?-?\d*)\s+(.+)$/);
-                if (fallbackMatch) {
-                    kode = fallbackMatch[1];
-                    jenisLimbahName = fallbackMatch[2];
-                } else {
-                    // If no pattern found, use the original jenisLimbah as name and generate a simple kode
-                    kode = `B${100 + sheetIndex}d`;
-                    jenisLimbahName = jenisLimbah;
-                }
-            }
+            const kode = groupKey;
+            const jenisLimbahName = groupKey;
 
             // Add to total data
             totalData.push({
                 no: sheetIndex,
-                jenis_limbah: jenisLimbahName, // Use the extracted name without kode
-                kode: kode, // Use the extracted kode
+                jenis_limbah: jenisLimbahName, // Use kode as name
+                kode: kode, // Kode as first token
                 bobot: jenisBobot
             });
 
