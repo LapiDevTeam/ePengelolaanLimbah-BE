@@ -172,16 +172,20 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
     // Accept optional query params: bagian (department) and tanggal (YYYY-MM-DD)
     const { bagian, tanggal } = req.query;
 
-    // Build where clause
-    const whereClause = {
-      status: "Completed",
+    // Build base where clause (without status)
+    const baseWhereClause = {
       berita_acara_id: null,
     };
 
-    if (bagian) whereClause.bagian = bagian;
+    if (bagian) baseWhereClause.bagian = bagian;
+
+    // Container to store all available requests (InProgress at step 4 + Completed)
+    let availableRequests = [];
 
     // Load completed requests with ApprovalHistory for Verifikasi Lapangan step
     let completedRequests;
+    // Also load in-progress requests waiting for HSE Manager (step_level 4)
+    let inProgressAtStep4 = [];
 
     if (tanggal) {
       // If tanggal is provided, we need to filter by approval date of "Verifikasi Lapangan" step
@@ -190,8 +194,26 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
       const start = parsedStartIso ? new Date(parsedStartIso) : new Date(`${tanggal}T00:00:00+07:00`);
       const end = parsedEndIso ? new Date(parsedEndIso) : new Date(`${tanggal}T23:59:59+07:00`);
 
+      // First: Query InProgress requests at approval workflow step_level 4
+      inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
+        where: { ...baseWhereClause, status: "InProgress" },
+        include: [
+          { model: DetailLimbah },
+          { model: GolonganLimbah },
+          { model: JenisLimbahB3 },
+          {
+            model: ApprovalWorkflowStep,
+            as: "CurrentStep",
+            where: { step_level: 4 },
+            required: true,
+          },
+        ],
+        order: [["created_at", "DESC"]],
+      });
+
+      // Second: Query Completed requests
       completedRequests = await PermohonanPemusnahanLimbah.findAll({
-        where: { ...whereClause },
+        where: { ...baseWhereClause, status: "Completed" },
         include: [
           { model: DetailLimbah },
           { model: GolonganLimbah },
@@ -217,9 +239,28 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
         order: [["created_at", "DESC"]],
       });
     } else {
-      // If no tanggal filter, load all completed requests with ApprovalHistory (for consistent data structure)
+      // If no tanggal filter, load all available requests with ApprovalHistory (for consistent data structure)
+      
+      // First: Query InProgress requests at approval workflow step_level 4
+      inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
+        where: { ...baseWhereClause, status: "InProgress" },
+        include: [
+          { model: DetailLimbah },
+          { model: GolonganLimbah },
+          { model: JenisLimbahB3 },
+          {
+            model: ApprovalWorkflowStep,
+            as: "CurrentStep",
+            where: { step_level: 4 },
+            required: true,
+          },
+        ],
+        order: [["created_at", "DESC"]],
+      });
+
+      // Second: Query Completed requests
       completedRequests = await PermohonanPemusnahanLimbah.findAll({
-        where: { ...whereClause },
+        where: { ...baseWhereClause, status: "Completed" },
         include: [
           { model: DetailLimbah },
           { model: GolonganLimbah },
@@ -258,9 +299,12 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
       }, {});
     }
 
-    // Since we already filtered by Verifikasi Lapangan approval date in the query above,
-    // we don't need additional filtering here
-    let filteredRequests = completedRequests;
+    // Push InProgress at step 4 first, then Completed requests into the container
+    availableRequests.push(...inProgressAtStep4);
+    availableRequests.push(...completedRequests);
+
+    // Use the combined container for mapping
+    let filteredRequests = availableRequests;
 
     // Map and aggregate data for frontend consumption
     const mapped = filteredRequests.map((reqItem) => {
@@ -667,8 +711,6 @@ const getAllBeritaAcara = async (req, res) => {
       delete queryOptionsForDB.limit;
       delete queryOptionsForDB.offset;
     }
-
-    console.log('[getAllBeritaAcara] Search params:', { searchValue, columnValue, whereClause, needsPostQueryFilter });
 
     const { count, rows: events } = await BeritaAcara.findAndCountAll(queryOptionsForDB);
 
