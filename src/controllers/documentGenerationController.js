@@ -1040,6 +1040,7 @@ const generateLogbookExcel = async (req, res) => {
  * NEW FUNCTION
  * GET /api/document-generation/permohonan/range/excel?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
  * Generates an Excel file with details of all permohonan within a date range (tanggal_pengajuan).
+ * Filter by bagian: KL users can download all, others can only download their own bagian.
  */
 const downloadPermohonanByDateRangeExcel = async (req, res) => {
     try {
@@ -1048,6 +1049,17 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
         if (!start_date || !end_date) {
             return res.status(400).json({ 
                 message: 'start_date and end_date query parameters are required (format: YYYY-MM-DD)' 
+            });
+        }
+
+        // Get user info from auth middleware
+        // Prefer delegatedUser if exists (when user is acting on behalf of another user)
+        const activeUser = req.delegatedUser || req.user;
+        const userBagian = activeUser?.emp_DeptID;
+        
+        if (!userBagian) {
+            return res.status(401).json({ 
+                message: 'User bagian information not found' 
             });
         }
 
@@ -1068,13 +1080,22 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
             return `${day}/${month}/${year}`;
         };
 
-        // --- Get permohonan data filtered by tanggal_pengajuan range ---
+        // --- Build where clause based on user bagian ---
+        const whereClause = {
+            created_at: {
+                [require('sequelize').Op.between]: [startDate, endDate]
+            }
+        };
+        
+        // If user bagian is not 'KL', filter by user's bagian
+        if (userBagian !== 'KL') {
+            whereClause.bagian = userBagian;
+        }
+        // If user bagian is 'KL', no bagian filter - download all
+
+        // --- Get permohonan data filtered by tanggal_pengajuan range and bagian ---
         const permohonanList = await PermohonanPemusnahanLimbah.findAll({
-            where: {
-                created_at: {
-                    [require('sequelize').Op.between]: [startDate, endDate]
-                }
-            },
+            where: whereClause,
             include: [
                 { model: DetailLimbah },
                 { model: GolonganLimbah },
