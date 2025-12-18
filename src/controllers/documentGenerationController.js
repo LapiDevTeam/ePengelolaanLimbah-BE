@@ -1053,9 +1053,7 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
         }
 
         // Get user info from auth middleware
-        // Prefer delegatedUser if exists (when user is acting on behalf of another user)
-        const activeUser = req.delegatedUser || req.user;
-        const userBagian = activeUser?.emp_DeptID;
+        const userBagian = req.user?.emp_DeptID;
         
         if (!userBagian) {
             return res.status(401).json({ 
