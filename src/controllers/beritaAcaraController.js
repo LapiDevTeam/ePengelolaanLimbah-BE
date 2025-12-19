@@ -207,6 +207,23 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
             where: { step_level: 4 },
             required: true,
           },
+          {
+            model: ApprovalHistory,
+            include: [
+              {
+                model: ApprovalWorkflowStep,
+                where: {
+                  step_level: 3, // Verifikasi Lapangan is step_level 3
+                  step_name: "Verifikasi Lapangan",
+                },
+              },
+            ],
+            where: {
+              status: "Approved",
+              decision_date: { [Op.between]: [start, end] },
+            },
+            required: true, // INNER JOIN to ensure we only get requests with approved Verifikasi Lapangan on this date
+          },
         ],
         order: [["created_at", "DESC"]],
       });
@@ -475,9 +492,29 @@ const createBeritaAcara = async (req, res) => {
     }
 
     // 1. Find selected completed requests that don't have a Berita Acara yet.
-    let completedRequests;
+    let inProgressAtStep4 = [];
+    let completedRequests = [];
     if (selectedRequestIds && selectedRequestIds.length > 0) {
-      // Use selected requests if provided
+      // First, check for requests that are in progress at step 4
+      inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
+        where: {
+          request_id: selectedRequestIds,
+          status: "InProgress",
+          berita_acara_id: null,
+        },
+        include: [
+          { model: GolonganLimbah },
+          { model: JenisLimbahB3 },
+          {
+            model: ApprovalWorkflowStep,
+            as: "CurrentStep",
+            where: { step_level: 4 },
+            required: true,
+          },
+        ],
+        transaction,
+      });
+      // Then, get selected completed requests
       completedRequests = await PermohonanPemusnahanLimbah.findAll({
         where: {
           request_id: selectedRequestIds,
@@ -488,7 +525,25 @@ const createBeritaAcara = async (req, res) => {
         transaction,
       });
     } else {
-      // Get all available completed requests if none selected
+      // Get all available in-progress requests at step 4
+      inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
+        where: {
+          status: "InProgress",
+          berita_acara_id: null,
+        },
+        include: [
+          { model: GolonganLimbah },
+          { model: JenisLimbahB3 },
+          {
+            model: ApprovalWorkflowStep,
+            as: "CurrentStep",
+            where: { step_level: 4 },
+            required: true,
+          },
+        ],
+        transaction,
+      });
+      // Get all available completed requests
       completedRequests = await PermohonanPemusnahanLimbah.findAll({
         where: {
           status: "Completed",
@@ -499,13 +554,16 @@ const createBeritaAcara = async (req, res) => {
       });
     }
 
-    if (completedRequests.length === 0) {
+    // Combine all available requests
+    let availableRequests = [...inProgressAtStep4, ...completedRequests];
+
+    if (availableRequests.length === 0) {
       await transaction.rollback();
-      return res.status(404).json({ message: "No completed requests found to generate a Berita Acara." });
+      return res.status(404).json({ message: "No available requests found to generate a Berita Acara." });
     }
 
-    // Find the latest completed request (by created_at) to extract verification data
-    const latestRequest = completedRequests.reduce((latest, current) => {
+    // Find the latest request (by created_at) to extract verification data
+    const latestRequest = availableRequests.reduce((latest, current) => {
       if (!latest) return current;
       const latestDate = new Date(latest.created_at);
       const currentDate = new Date(current.created_at);
@@ -552,8 +610,8 @@ const createBeritaAcara = async (req, res) => {
       });
     }
 
-    // Determine the appropriate signing workflow based on the requests
-    const signingWorkflowId = await determineSigningWorkflow(completedRequests);
+    // Determine the appropriate signing workflow based on all available requests
+    const signingWorkflowId = await determineSigningWorkflow(availableRequests);
 
     // Find the first actual signing step (should be the lowest step_level, typically level 2)
     const firstSigningStep = await SigningWorkflowStep.findOne({
@@ -603,8 +661,8 @@ const createBeritaAcara = async (req, res) => {
 
     const beritaAcara = await BeritaAcara.create(beritaPayload, { transaction });
 
-    // 3. Link all the completed requests to this new Berita Acara.
-    const requestIds = completedRequests.map((req) => req.request_id);
+    // 3. Link all available requests to this new Berita Acara.
+    const requestIds = availableRequests.map((req) => req.request_id);
     await PermohonanPemusnahanLimbah.update(
       { berita_acara_id: beritaAcara.berita_acara_id },
       { where: { request_id: requestIds }, transaction }
@@ -614,7 +672,7 @@ const createBeritaAcara = async (req, res) => {
     await transaction.commit();
 
     res.status(201).json({
-      message: `Berita Acara created successfully and linked to ${completedRequests.length} requests.`,
+      message: `Berita Acara created successfully and linked to ${availableRequests.length} requests.`,
       data: beritaAcara,
     });
   } catch (error) {
