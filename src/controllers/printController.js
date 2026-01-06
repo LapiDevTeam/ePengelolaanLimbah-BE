@@ -6,10 +6,10 @@ class PrintController {
   /**
    * Print Permohonan Pemusnahan Limbah B3
    * GET /api/print-permohonan-pemusnahan
-   * Query params: link, requestId, createdAt
+   * Query params: link, requestId, createdAt, token (optional - for direct browser access)
    */
   static async printPermohonanPemusnahan(req, res) {
-    const { link, requestId, createdAt } = req.query;
+    const { link, requestId, createdAt, token: queryToken } = req.query;
 
     // Validate required parameters
     if (!link) {
@@ -62,20 +62,20 @@ class PrintController {
 
       const page = await browser.newPage();
 
-      // If the incoming request carried an Authorization header, pass the token
-      // into the headless browser so the frontend page can authenticate itself
-      // (the app uses sessionStorage/localStorage for tokens). This prevents
-      // puppeteer from being redirected to the login page.
+      // Get token from query parameter OR Authorization header
+      // Priority: query parameter (for direct browser access), then Authorization header (for API calls)
       const authHeader = req.headers.authorization || req.headers.Authorization || "";
-      const token =
+      const headerToken =
         authHeader && authHeader.toString().startsWith("Bearer ") ? authHeader.toString().slice(7) : authHeader;
+      
+      const token = queryToken || headerToken;
 
       if (!token) {
-        console.warn("PrintController: No authorization token found in request headers");
+        console.warn("PrintController: No authorization token found in request (checked query param and headers)");
         if (browser) await browser.close();
         return res.status(401).json({
           success: false,
-          error: "Authentication token required. Please include Authorization header with Bearer token.",
+          error: "Authentication token required. Please include token as query parameter or Authorization header with Bearer token.",
         });
       }
 
@@ -376,10 +376,10 @@ class PrintController {
   /**
    * Print Berita Acara Pemusnahan Limbah B3
    * GET /api/print-berita-acara-pemusnahan
-   * Query params: link, beritaAcaraId, createdAt
+   * Query params: link, beritaAcaraId, createdAt, token (optional - for direct browser access)
    */
   static async printBeritaAcaraPemusnahan(req, res) {
-    const { link, beritaAcaraId, createdAt } = req.query;
+    const { link, beritaAcaraId, createdAt, token: queryToken } = req.query;
 
     let browser;
     try {
@@ -418,13 +418,13 @@ class PrintController {
 
       const page = await browser.newPage();
 
-      // If the incoming request carried an Authorization header, pass the token
-      // into the headless browser so the frontend page can authenticate itself
-      // (the app uses sessionStorage/localStorage for tokens). This prevents
-      // puppeteer from being redirected to the login page.
+      // Get token from query parameter OR Authorization header
+      // Priority: query parameter (for direct browser access), then Authorization header (for API calls)
       const authHeader = req.headers.authorization || req.headers.Authorization || "";
-      const token =
+      const headerToken =
         authHeader && authHeader.toString().startsWith("Bearer ") ? authHeader.toString().slice(7) : authHeader;
+      
+      const token = queryToken || headerToken;
 
       if (token) {
         try {

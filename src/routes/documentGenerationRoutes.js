@@ -10,7 +10,23 @@ const {
 const PrintController = require('../controllers/printController');
 const authMiddleware = require('../middleware/authMiddleware');
 
-// All routes in this file are protected by the authentication middleware
+/**
+ * GET /api/print-permohonan-pemusnahan
+ * The new endpoint for printing the 'Permohonan Pemusnahan' document.
+ * This route does NOT use authMiddleware because it accepts token via query parameter
+ * for direct browser access (window.open)
+ */
+router.get('/print-permohonan-pemusnahan', PrintController.printPermohonanPemusnahan);
+
+/**
+ * GET /api/print-berita-acara-pemusnahan
+ * The new endpoint for printing the 'Berita Acara Pemusnahan' document.
+ * This route does NOT use authMiddleware because it accepts token via query parameter
+ * for direct browser access (window.open)
+ */
+router.get('/print-berita-acara-pemusnahan', PrintController.printBeritaAcaraPemusnahan);
+
+// All routes below are protected by the authentication middleware
 router.use(authMiddleware);
 
 /**
@@ -24,18 +40,6 @@ router.get('/permohonan/:id', getPermohonanDataForDoc);
  * Retrieves formatted data for generating the 'Berita Acara' document.
  */
 router.get('/berita-acara/:id', getBeritaAcaraDataForDoc);
-
-/**
- * GET /api/print-permohonan-pemusnahan
- * The new endpoint for printing the 'Permohonan Pemusnahan' document.
- */
-router.get('/print-permohonan-pemusnahan', PrintController.printPermohonanPemusnahan);
-
-/**
- * GET /api/print-berita-acara-pemusnahan
- * The new endpoint for printing the 'Berita Acara Pemusnahan' document.
- */
-router.get('/print-berita-acara-pemusnahan', PrintController.printBeritaAcaraPemusnahan);
 
 /**
  * GET /api/document-generation/permohonan/range/excel?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
