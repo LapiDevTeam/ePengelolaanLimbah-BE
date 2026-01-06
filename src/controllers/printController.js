@@ -1,6 +1,7 @@
 const puppeteer = require("puppeteer");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
 class PrintController {
   /**
@@ -54,10 +55,20 @@ class PrintController {
         console.warn("PrintController: logo_bnw.png not found in any expected location:", possibleLogoPaths);
       }
 
-      // Launch browser
+      // Launch browser with Windows-compatible settings
       browser = await puppeteer.launch({
         headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-accelerated-2d-canvas",
+          "--no-first-run",
+          "--no-zygote",
+          "--disable-gpu"
+        ],
+        // Use explicit temp directory to avoid Windows path issues
+        userDataDir: path.join(os.tmpdir(), `puppeteer_${Date.now()}`)
       });
 
       const page = await browser.newPage();
@@ -410,10 +421,20 @@ class PrintController {
         console.warn("PrintController: logo_bnw.png not found in any expected location:", possibleLogoPaths);
       }
 
-      // Launch browser
+      // Launch browser with Windows-compatible settings
       browser = await puppeteer.launch({
         headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-accelerated-2d-canvas",
+          "--no-first-run",
+          "--no-zygote",
+          "--disable-gpu"
+        ],
+        // Use explicit temp directory to avoid Windows path issues
+        userDataDir: path.join(os.tmpdir(), `puppeteer_${Date.now()}`)
       });
 
       const page = await browser.newPage();
