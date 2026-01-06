@@ -1055,6 +1055,29 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
             return `${day}/${month}/${year}`;
         };
 
+        // --- Helper function to check if permohonan has passed field verification ---
+        const hasPassedVerification = (permohonan) => {
+            if (!permohonan.ApprovalHistories || permohonan.ApprovalHistories.length === 0) {
+                return false;
+            }
+            
+            // Check if ALL 4 verification roles have approved (VERIF_ROLE:1, VERIF_ROLE:2, VERIF_ROLE:3, VERIF_ROLE:4)
+            const verificationApprovals = permohonan.ApprovalHistories.filter(
+                h => h.status === 'Approved' && 
+                     h.approver_jabatan && 
+                     h.approver_jabatan.includes('VERIF_ROLE')
+            );
+            
+            // Check if all 4 roles are present
+            const hasRole1 = verificationApprovals.some(h => h.approver_jabatan.includes('VERIF_ROLE:1'));
+            const hasRole2 = verificationApprovals.some(h => h.approver_jabatan.includes('VERIF_ROLE:2'));
+            const hasRole3 = verificationApprovals.some(h => h.approver_jabatan.includes('VERIF_ROLE:3'));
+            const hasRole4 = verificationApprovals.some(h => h.approver_jabatan.includes('VERIF_ROLE:4'));
+            
+            // All 4 roles must have approved
+            return hasRole1 && hasRole2 && hasRole3 && hasRole4;
+        };
+
         // --- Build where clause based on user bagian ---
         const whereClause = {
             created_at: {
@@ -1078,15 +1101,55 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
                 { 
                     model: ApprovalHistory,
                     include: [{ model: ApprovalWorkflowStep }],
-                    required: false
+                    // required: false
                 }
             ],
             order: [['created_at', 'DESC']]
         });
+        console.log("🚀 ~ Total permohonan found:", permohonanList.length)
 
-        if (!permohonanList || permohonanList.length === 0) {
+        // --- Filter permohonan: Completed, Rejected, or InProgress with verification completed ---
+        const filteredPermohonanList = permohonanList.filter(permohonan => {
+            const status = permohonan.status;
+            const passedVerification = hasPassedVerification(permohonan);
+            
+            // Console log for debugging
+            console.log(`\n📋 Permohonan: ${permohonan.nomor_permohonan}`);
+            console.log(`   Status: ${status}`);
+            console.log(`   Passed Verification: ${passedVerification}`);
+            
+            if (permohonan.ApprovalHistories && permohonan.ApprovalHistories.length > 0) {
+                console.log(`   Approval History:`);
+                const verifRoles = { role1: false, role2: false, role3: false, role4: false };
+                permohonan.ApprovalHistories.forEach(history => {
+                    console.log(`     - ${history.ApprovalWorkflowStep?.step_name || 'Unknown'} (Level ${history.ApprovalWorkflowStep?.step_level}) - ${history.status} - ${history.approver_jabatan || 'N/A'}`);
+                    
+                    // Track verification roles
+                    if (history.status === 'Approved' && history.approver_jabatan) {
+                        if (history.approver_jabatan.includes('VERIF_ROLE:1')) verifRoles.role1 = true;
+                        if (history.approver_jabatan.includes('VERIF_ROLE:2')) verifRoles.role2 = true;
+                        if (history.approver_jabatan.includes('VERIF_ROLE:3')) verifRoles.role3 = true;
+                        if (history.approver_jabatan.includes('VERIF_ROLE:4')) verifRoles.role4 = true;
+                    }
+                });
+                console.log(`   Verification Roles Completed:`, verifRoles);
+            }
+            
+            // Include if: Completed, Rejected, or (InProgress AND has passed verification)
+            const shouldInclude = status === 'Completed' || 
+                                  status === 'Rejected' || 
+                                  (status === 'InProgress' && passedVerification);
+            
+            console.log(`   ✓ Include in export: ${shouldInclude}`);
+            
+            return shouldInclude;
+        });
+
+        console.log(`\n✅ Filtered permohonan count: ${filteredPermohonanList.length}`);
+
+        if (!filteredPermohonanList || filteredPermohonanList.length === 0) {
             return res.status(404).json({ 
-                message: 'No permohonan found in the specified date range' 
+                message: 'No permohonan found matching the criteria (Completed, Rejected, or InProgress with verification completed)' 
             });
         }
 
@@ -1117,7 +1180,8 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
             { header: 'Satuan', key: 'satuan', width: 12 },
             { header: 'No. Wadah', key: 'nomor_wadah', width: 12 },
             { header: 'Bobot (gram)', key: 'bobot', width: 12, style: { numFmt: '#,##0.00' } },
-            { header: 'Alasan Pemusnahan', key: 'alasan_pemusnahan', width: 28 }
+            { header: 'Alasan Pemusnahan', key: 'alasan_pemusnahan', width: 28 },
+            { header: 'Status', key: 'status', width: 15 }
         ];
         
         worksheet.getRow(1).eachCell(cell => {
@@ -1127,7 +1191,7 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
         // --- Process each permohonan and add rows ---
         const dataRows = [];
         
-        permohonanList.forEach(permohonan => {
+        filteredPermohonanList.forEach(permohonan => {
             // Get tanggal pemusnahan from verification approval
             let tanggal_pemusnahan = '';
             if (permohonan.ApprovalHistories && permohonan.ApprovalHistories.length > 0) {
@@ -1160,7 +1224,8 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
                         golongan_limbah: permohonan.GolonganLimbah?.nama || 'N/A',
                         jenis_limbah: permohonan.JenisLimbahB3?.nama || 'N/A',
                         is_produk_pangan: permohonan.is_produk_pangan ? 'Ya' : 'Tidak',
-                        bobot: parseFloat(detail.bobot || 0)
+                        bobot: parseFloat(detail.bobot || 0),
+                        status: permohonan.status || 'N/A'
                     });
                 });
             } else {
@@ -1173,7 +1238,8 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
                     bentuk_limbah: permohonan.bentuk_limbah,
                     golongan_limbah: permohonan.GolonganLimbah?.nama || 'N/A',
                     jenis_limbah: permohonan.JenisLimbahB3?.nama || 'N/A',
-                    is_produk_pangan: permohonan.is_produk_pangan ? 'Ya' : 'Tidak'
+                    is_produk_pangan: permohonan.is_produk_pangan ? 'Ya' : 'Tidak',
+                    status: permohonan.status || 'N/A'
                 });
             }
         });
