@@ -5,7 +5,7 @@ module.exports = (sequelize, DataTypes) => {
     bagian: { type: DataTypes.TEXT, allowNull: false },
     bentuk_limbah: { type: DataTypes.ENUM('Padat', 'Cair'), allowNull: false },
     status: {
-      type: DataTypes.ENUM('Draft', 'InProgress', 'Completed', 'Rejected'),
+      type: DataTypes.ENUM('Draft', 'InProgress', 'Completed', 'Rejected', 'Pembuatan BAP'),
       allowNull: false,
       defaultValue: 'Draft'
     },
