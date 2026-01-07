@@ -1371,21 +1371,11 @@ const approvePermohonan = async (req, res) => {
           permohonan.current_step_id = permohonan.current_step_id;
           permohonan.status = 'InProgress';
         }
-      } else if (permohonan.CurrentStep.step_level === 4) {
-        // HSE Manager step: After approval, set status to 'Pembuatan BAP'
-        if (histories.length >= requiredApprovals) {
-          permohonan.current_step_id = nextStep ? nextStep.step_id : null;
-          // Set status to 'Pembuatan BAP' after HSE Manager approval
-          permohonan.status = nextStep ? 'Pembuatan BAP' : 'Completed';
-        } else {
-          permohonan.current_step_id = permohonan.current_step_id;
-          permohonan.status = 'InProgress';
-        }
       } else {
         // Other steps: use count-based approach with required_approvals
         if (histories.length >= requiredApprovals) {
           permohonan.current_step_id = nextStep ? nextStep.step_id : null;
-          if (!nextStep) permohonan.status = 'Completed';
+          if (!nextStep) permohonan.status = 'Pembuatan BAP';
         } else {
           permohonan.current_step_id = permohonan.current_step_id;
           permohonan.status = 'InProgress';
