@@ -308,14 +308,69 @@ const getBeritaAcaraDataForDoc = async (req, res) => {
         };
         const hari_tanggal = new Intl.DateTimeFormat('id-ID', dateOptions).format(latestSigningTimestamp);
 
-        // Options for formatting the time (e.g., "10:11")
+        // Options for formatting the time (e.g., "17:00")
         const timeOptions = { 
             hour: '2-digit', 
             minute: '2-digit', 
             hour12: false,
             timeZone: 'Asia/Jakarta'
         };
-        const jam_waktu = new Intl.DateTimeFormat('id-ID', timeOptions).format(latestSigningTimestamp);
+        
+        // Helper function to format time as HH:mm
+        const formatTime = (date) => {
+            const hours = date.toLocaleString('en-US', { hour: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' });
+            const minutes = date.toLocaleString('en-US', { minute: '2-digit', timeZone: 'Asia/Jakarta' });
+            return `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`;
+        };
+        
+        // --- NEW: Get verification time range from ApprovalHistory (Verifikasi Lapangan step) ---
+        // Collect all request IDs from the berita acara
+        const requestIds = (beritaAcara.PermohonanPemusnahanLimbahs || []).map(p => p.request_id);
+        
+        let jam_waktu = '';
+        
+        if (requestIds.length > 0) {
+            // Fetch all approval histories for Verifikasi Lapangan step across all linked requests
+            const verificationHistories = await ApprovalHistory.findAll({
+                where: {
+                    request_id: { [require('sequelize').Op.in]: requestIds },
+                    status: 'Approved'
+                },
+                include: [{
+                    model: ApprovalWorkflowStep,
+                    where: { step_name: 'Verifikasi Lapangan' },
+                    required: true
+                }]
+            });
+
+            if (verificationHistories.length > 0) {
+                // Get all approval timestamps
+                const approvalTimes = verificationHistories
+                    .filter(h => h.decision_date)
+                    .map(h => new Date(h.decision_date).getTime())
+                    .filter(t => !isNaN(t) && isFinite(t));
+
+                if (approvalTimes.length > 0) {
+                    const earliestTime = new Date(Math.min(...approvalTimes));
+                    const latestTime = new Date(Math.max(...approvalTimes));
+
+                    const startTime = formatTime(earliestTime);
+                    const endTime = formatTime(latestTime);
+
+                    // If start and end are the same, just show one time
+                    if (startTime === endTime) {
+                        jam_waktu = startTime;
+                    } else {
+                        jam_waktu = `${startTime} - ${endTime}`;
+                    }
+                }
+            }
+        }
+        
+        // Fallback to latest signing timestamp if no verification time found
+        if (!jam_waktu) {
+            jam_waktu = formatTime(latestSigningTimestamp);
+        }
         
 
         // --- Create a detailed list for each linked Permohonan ---
