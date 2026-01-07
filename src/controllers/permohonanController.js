@@ -279,7 +279,7 @@ const createPermohonan = async (req, res) => {
  */
 const getAllPermohonan = async (req, res) => {
   try {
-    const { page = 1, limit = 8, search = '', column = '', userOnly = false, pendingApproval = false, processedBy = false } = req.query;
+    const { page = 1, limit = 8, search = '', column = '', userOnly = false, pendingApproval = false, processedBy = false, status } = req.query;
     const { user, delegatedUser } = req;
     // For data filtering: use the actual logged-in user, not the delegated user
     // For actions: use delegatedUser if available (handled in other operations)
@@ -316,6 +316,11 @@ const getAllPermohonan = async (req, res) => {
       } else if (column === 'bagian') {
         whereClause.bagian = searchCondition;
       }
+    }
+
+    // Filter by status if explicitly requested (e.g., Rejected tab)
+    if (status) {
+      whereClause.status = status;
     }
 
     const queryOptions = {
