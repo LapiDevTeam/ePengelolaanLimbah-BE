@@ -340,7 +340,8 @@ const getAllPermohonan = async (req, res) => {
       limit: parseInt(limit),
       offset: offset,
       order: [['created_at', 'DESC']],
-      where: whereClause
+      where: whereClause,
+      distinct: true  // Ensure count is based on unique PermohonanPemusnahanLimbah records
     };
 
     // Force current step to verification (step 3) when requested
