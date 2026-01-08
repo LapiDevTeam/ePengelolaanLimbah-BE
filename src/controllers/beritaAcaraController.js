@@ -228,9 +228,9 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
         order: [["created_at", "DESC"]],
       });
 
-      // Second: Query Completed requests
+      // Second: Query requests with status 'Pembuatan BAP' (ready for Berita Acara)
       completedRequests = await PermohonanPemusnahanLimbah.findAll({
-        where: { ...baseWhereClause, status: "Completed" },
+        where: { ...baseWhereClause, status: "Pembuatan BAP" },
         include: [
           { model: DetailLimbah },
           { model: GolonganLimbah },
@@ -275,9 +275,9 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
         order: [["created_at", "DESC"]],
       });
 
-      // Second: Query Completed requests
+      // Second: Query requests with status 'Pembuatan BAP' (ready for Berita Acara)
       completedRequests = await PermohonanPemusnahanLimbah.findAll({
-        where: { ...baseWhereClause, status: "Completed" },
+        where: { ...baseWhereClause, status: "Pembuatan BAP" },
         include: [
           { model: DetailLimbah },
           { model: GolonganLimbah },
@@ -514,11 +514,11 @@ const createBeritaAcara = async (req, res) => {
         ],
         transaction,
       });
-      // Then, get selected completed requests
+      // Then, get selected requests with status 'Pembuatan BAP'
       completedRequests = await PermohonanPemusnahanLimbah.findAll({
         where: {
           request_id: selectedRequestIds,
-          status: "Completed",
+          status: "Pembuatan BAP",
           berita_acara_id: null,
         },
         include: [{ model: GolonganLimbah }, { model: JenisLimbahB3 }],
@@ -543,10 +543,10 @@ const createBeritaAcara = async (req, res) => {
         ],
         transaction,
       });
-      // Get all available completed requests
+      // Get all available requests with status 'Pembuatan BAP'
       completedRequests = await PermohonanPemusnahanLimbah.findAll({
         where: {
-          status: "Completed",
+          status: "Pembuatan BAP",
           berita_acara_id: null,
         },
         include: [{ model: GolonganLimbah }, { model: JenisLimbahB3 }],
@@ -661,10 +661,13 @@ const createBeritaAcara = async (req, res) => {
 
     const beritaAcara = await BeritaAcara.create(beritaPayload, { transaction });
 
-    // 3. Link all available requests to this new Berita Acara.
+    // 3. Link all available requests to this new Berita Acara and update status to 'Completed'.
     const requestIds = availableRequests.map((req) => req.request_id);
     await PermohonanPemusnahanLimbah.update(
-      { berita_acara_id: beritaAcara.berita_acara_id },
+      { 
+        berita_acara_id: beritaAcara.berita_acara_id,
+        status: "Completed"  // Update status from 'Pembuatan BAP' to 'Completed' when linked to Berita Acara
+      },
       { where: { request_id: requestIds }, transaction }
     );
 
