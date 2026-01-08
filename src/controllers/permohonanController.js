@@ -279,7 +279,7 @@ const createPermohonan = async (req, res) => {
  */
 const getAllPermohonan = async (req, res) => {
   try {
-    const { page = 1, limit = 8, search = '', column = '', userOnly = false, pendingApproval = false, processedBy = false, status } = req.query;
+    const { page = 1, limit = 8, search = '', column = '', userOnly = false, pendingApproval = false, processedBy = false, status, verificationOnly = false } = req.query;
     const { user, delegatedUser } = req;
     // For data filtering: use the actual logged-in user, not the delegated user
     // For actions: use delegatedUser if available (handled in other operations)
@@ -323,6 +323,13 @@ const getAllPermohonan = async (req, res) => {
       whereClause.status = status;
     }
 
+    const isVerificationOnly = verificationOnly === 'true' || verificationOnly === true;
+
+    // For verification tab: show only InProgress requests at verification step (step 3)
+    if (isVerificationOnly) {
+      whereClause.status = 'InProgress';
+    }
+
     const queryOptions = {
       include: [
         { model: DetailLimbah, required: false },
@@ -335,6 +342,18 @@ const getAllPermohonan = async (req, res) => {
       order: [['created_at', 'DESC']],
       where: whereClause
     };
+
+    // Force current step to verification (step 3) when requested
+    if (isVerificationOnly) {
+      queryOptions.include = queryOptions.include.filter(include => include.as !== 'CurrentStep');
+      queryOptions.include.push({
+        model: ApprovalWorkflowStep,
+        as: 'CurrentStep',
+        required: true,
+        where: { step_level: 3 },
+        include: [ApprovalWorkflowApprover]
+      });
+    }
     
     // Filter by user's own requests if userOnly is specified
     if (userOnly === 'true' || userOnly === true) {
@@ -404,7 +423,7 @@ const getAllPermohonan = async (req, res) => {
     }
 
     // Enhanced pendingApproval filtering with external API
-    if (pendingApproval === 'true' || pendingApproval === true) {
+    if (!isVerificationOnly && (pendingApproval === 'true' || pendingApproval === true)) {
       try {
         const axios = require('axios');
         const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
