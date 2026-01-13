@@ -279,7 +279,7 @@ const createPermohonan = async (req, res) => {
  */
 const getAllPermohonan = async (req, res) => {
   try {
-    const { page = 1, limit = 8, search = '', column = '', userOnly = false, pendingApproval = false, processedBy = false, status, verificationOnly = false } = req.query;
+    const { page = 1, limit = 8, search = '', column = '', userOnly = false, pendingApproval = false, processedBy = false, status, verificationOnly = false, statusFilter = '' } = req.query;
     const { user, delegatedUser } = req;
     // For data filtering: use the actual logged-in user, not the delegated user
     // For actions: use delegatedUser if available (handled in other operations)
@@ -323,6 +323,24 @@ const getAllPermohonan = async (req, res) => {
       whereClause.status = status;
     }
 
+    // Handle statusFilter for KL dashboard cards
+    // This maps dashboard card filters to appropriate query conditions
+    let statusFilterStepLevel = null;
+    if (statusFilter) {
+      if (statusFilter === 'Verification') {
+        // Show InProgress requests at verification step (step 3)
+        whereClause.status = 'InProgress';
+        statusFilterStepLevel = 3;
+      } else if (statusFilter === 'WaitingHSEManager') {
+        // Show InProgress requests at HSE Manager step (step 4)
+        whereClause.status = 'InProgress';
+        statusFilterStepLevel = 4;
+      } else if (statusFilter === 'Rejected') {
+        // Show all rejected requests
+        whereClause.status = 'Rejected';
+      }
+    }
+
     const isVerificationOnly = verificationOnly === 'true' || verificationOnly === true;
 
     // For verification tab: show only InProgress requests at verification step (step 3)
@@ -352,6 +370,18 @@ const getAllPermohonan = async (req, res) => {
         as: 'CurrentStep',
         required: true,
         where: { step_level: 3 },
+        include: [ApprovalWorkflowApprover]
+      });
+    }
+
+    // Apply statusFilter step level filtering (for KL dashboard cards)
+    if (statusFilterStepLevel) {
+      queryOptions.include = queryOptions.include.filter(include => include.as !== 'CurrentStep');
+      queryOptions.include.push({
+        model: ApprovalWorkflowStep,
+        as: 'CurrentStep',
+        required: true,
+        where: { step_level: statusFilterStepLevel },
         include: [ApprovalWorkflowApprover]
       });
     }
