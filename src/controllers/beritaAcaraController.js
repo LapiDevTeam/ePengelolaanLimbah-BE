@@ -763,6 +763,8 @@ const getAllBeritaAcara = async (req, res) => {
           ],
         },
         { model: SigningWorkflowStep, include: [SigningWorkflowSigner] },
+        // Include related permohonan numbers so frontend can filter by request numbers
+        { model: PermohonanPemusnahanLimbah, required: false, attributes: ['nomor_permohonan'] },
       ],
     };
 
@@ -809,6 +811,9 @@ const getAllBeritaAcara = async (req, res) => {
     // --- TRANSFORMATION LOGIC (from your original file) ---
     const transformed = filteredEvents.map((ev) => {
       const e = ev.toJSON ? ev.toJSON() : ev;
+      // Extract related permohonan numbers for frontend filtering
+      const relatedPermohonan = Array.isArray(e.PermohonanPemusnahanLimbahs) ? e.PermohonanPemusnahanLimbahs : [];
+      const permohonanNumbers = relatedPermohonan.map((p) => p.nomor_permohonan).filter(Boolean);
       let steps = [];
       if (e.SigningWorkflow && Array.isArray(e.SigningWorkflow.SigningWorkflowSteps)) {
         steps = e.SigningWorkflow.SigningWorkflowSteps.map((s) => ({
@@ -826,8 +831,12 @@ const getAllBeritaAcara = async (req, res) => {
         }
       }
 
+      // Omit the embedded PermohonanPemusnahanLimbahs objects to avoid duplication
+      const { PermohonanPemusnahanLimbahs, ...rest } = e;
       return {
-        ...e,
+        ...rest,
+        permohonanNumbers,
+        permohonanNumber: permohonanNumbers.length > 0 ? permohonanNumbers[0] : null,
         id: e.berita_acara_id, // Add an 'id' field for the frontend key
         currentStepLevel: current_step_level, // Match frontend property name
         SigningWorkflowSteps: steps,
