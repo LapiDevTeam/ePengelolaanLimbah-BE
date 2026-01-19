@@ -859,8 +859,17 @@ const generateLogbookExcel = async (req, res) => {
             // Sheet name uses kode (or Lain-lain)
             const sheetDisplayName = groupKey;
             // Create worksheet for this jenis limbah (sanitize sheet name)
-            const sanitizedSheetName = sheetDisplayName.replace(/[\\\/\[\]:\*\?]/g, '').substring(0, 31);
-            const worksheet = workbook.addWorksheet(sanitizedSheetName);
+            let sanitizedSheetName = sheetDisplayName.replace(/[\\\/\[\]:\*\?]/g, '').substring(0, 31);
+            
+            // Prevent duplicate worksheet names, especially avoid "Total" which is reserved
+            let finalSheetName = sanitizedSheetName;
+            let counter = 1;
+            while (workbook.getWorksheet(finalSheetName)) {
+                finalSheetName = `${sanitizedSheetName}_${counter}`;
+                counter++;
+            }
+            
+            const worksheet = workbook.addWorksheet(finalSheetName);
             
             // Add title row
             const titleText = `Logbook ${sheetDisplayName}`;
@@ -936,7 +945,15 @@ const generateLogbookExcel = async (req, res) => {
         });
 
         // --- Create Total sheet ---
-        const totalWorksheet = workbook.addWorksheet('Total');
+        // Ensure the "Total" worksheet name is available
+        let totalSheetName = 'Total';
+        let totalCounter = 1;
+        while (workbook.getWorksheet(totalSheetName)) {
+            totalSheetName = `Total_${totalCounter}`;
+            totalCounter++;
+        }
+        
+        const totalWorksheet = workbook.addWorksheet(totalSheetName);
         
         // Add title row for Total sheet
         totalWorksheet.mergeCells('A1:D1'); // Merge cells for title (4 columns total)
@@ -1010,7 +1027,15 @@ const generateLogbookExcel = async (req, res) => {
         // Check if no data found and create at least one sheet
         if (Object.keys(groupedData).length === 0) {
             // Create empty Total sheet if no data
-            const emptyWorksheet = workbook.addWorksheet('Total');
+            // Ensure the "Total" worksheet name is available
+            let emptySheetName = 'Total';
+            let emptyCounter = 1;
+            while (workbook.getWorksheet(emptySheetName)) {
+                emptySheetName = `Total_${emptyCounter}`;
+                emptyCounter++;
+            }
+            
+            const emptyWorksheet = workbook.addWorksheet(emptySheetName);
             
             // Add title row for empty sheet
             emptyWorksheet.mergeCells('A1:D1');
