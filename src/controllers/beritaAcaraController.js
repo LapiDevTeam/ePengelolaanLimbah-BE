@@ -738,6 +738,22 @@ const getAllBeritaAcara = async (req, res) => {
           Sequelize.where(Sequelize.fn('to_char', Sequelize.col('BeritaAcara.tanggal'), 'DD/MM/YYYY'), searchCondition),
           Sequelize.where(Sequelize.fn('to_char', Sequelize.col('BeritaAcara.tanggal'), 'DD-MM-YYYY'), searchCondition)
         ];
+      } else if (columnValue === 'no_bap') {
+        // Search by BAP number (BA-001, BA-002, etc.)
+        // Extract numeric part if search includes "BA-" prefix
+        const searchNum = searchValue.replace(/^BA-/i, '').trim();
+        if (!isNaN(searchNum) && searchNum !== '') {
+          // If numeric search, match berita_acara_id
+          whereClause.berita_acara_id = parseInt(searchNum);
+        } else {
+          // Otherwise, format berita_acara_id as BA-XXX and search
+          whereClause[Op.or] = [
+            Sequelize.where(
+              Sequelize.fn('CONCAT', 'BA-', Sequelize.fn('LPAD', Sequelize.cast(Sequelize.col('BeritaAcara.berita_acara_id'), 'VARCHAR'), 3, '0')),
+              searchCondition
+            )
+          ];
+        }
       } else if (columnValue === 'bagian') {
         whereClause.bagian = searchCondition;
       } else if (columnValue === 'lokasi_verifikasi') {
@@ -835,6 +851,7 @@ const getAllBeritaAcara = async (req, res) => {
       const { PermohonanPemusnahanLimbahs, ...rest } = e;
       return {
         ...rest,
+        noBeritaAcara: `BA-${String(e.berita_acara_id).padStart(3, '0')}`, // Generate BAP number
         permohonanNumbers,
         permohonanNumber: permohonanNumbers.length > 0 ? permohonanNumbers[0] : null,
         id: e.berita_acara_id, // Add an 'id' field for the frontend key
