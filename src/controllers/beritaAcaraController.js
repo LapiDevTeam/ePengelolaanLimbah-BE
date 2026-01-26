@@ -21,6 +21,7 @@ const { Op } = require("sequelize");
 const Sequelize = require('sequelize');
 
 const jakartaTime = require("../utils/jakartaTime");
+const { getWorkflowNamesByGroup } = require("../utils/golonganGroupMapping");
 
 const { determineSigningWorkflow } = require("./workflowController");
 
@@ -711,12 +712,25 @@ const getAllBeritaAcara = async (req, res) => {
       searchTerm = "", 
       selectedColumn = "",
       search = "",
-      column = ""
+      column = "",
+      group = ""
     } = req.query;
 
     // Use whichever is provided
     const searchValue = searchTerm || search;
     const columnValue = selectedColumn || column;
+
+    // Validate and resolve group parameter
+    let workflowNames = null;
+    if (group) {
+      workflowNames = getWorkflowNamesByGroup(group);
+      if (!workflowNames) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid group parameter: ${group}`,
+        });
+      }
+    }
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
@@ -770,6 +784,12 @@ const getAllBeritaAcara = async (req, res) => {
       include: [
         {
           model: SigningWorkflow,
+          ...(workflowNames && {
+            where: {
+              workflow_name: { [Op.in]: workflowNames }
+            },
+            required: true
+          }),
           include: [
             {
               model: SigningWorkflowStep,

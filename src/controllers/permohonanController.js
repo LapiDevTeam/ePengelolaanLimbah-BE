@@ -14,6 +14,7 @@ const {
 
 const { determineApprovalWorkflow } = require('./workflowController');
 const { generateNomorPermohonan } = require('../utils/nomorPermohonanGenerator');
+const { getGolonganNamesByGroup } = require('../utils/golonganGroupMapping');
 
 // --- Helper Function for External API Authorization ---
 const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
@@ -279,7 +280,7 @@ const createPermohonan = async (req, res) => {
  */
 const getAllPermohonan = async (req, res) => {
   try {
-    const { page = 1, limit = 8, search = '', column = '', userOnly = false, pendingApproval = false, processedBy = false, status, verificationOnly = false, statusFilter = '' } = req.query;
+    const { page = 1, limit = 8, search = '', column = '', userOnly = false, pendingApproval = false, processedBy = false, status, verificationOnly = false, statusFilter = '', group = '' } = req.query;
     const { user, delegatedUser } = req;
     // For data filtering: use the actual logged-in user, not the delegated user
     // For actions: use delegatedUser if available (handled in other operations)
@@ -316,6 +317,18 @@ const getAllPermohonan = async (req, res) => {
       } else if (column === 'bagian') {
         whereClause.bagian = searchCondition;
       }
+    }
+
+    // Validate and apply group filtering
+    if (group) {
+      const golonganNames = getGolonganNamesByGroup(group);
+      if (!golonganNames) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid group parameter: ${group}`,
+        });
+      }
+      whereClause['$GolonganLimbah.nama$'] = { [Op.in]: golonganNames };
     }
 
     // Filter by status if explicitly requested (e.g., Rejected tab)
