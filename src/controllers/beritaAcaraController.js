@@ -879,11 +879,29 @@ const getAllBeritaAcara = async (req, res) => {
         SigningWorkflowSteps: steps,
       };
     });
+
+    // Compute can_sign for each Berita Acara
+    const transformedWithCanSign = await Promise.all(
+      transformed.map(async (item) => {
+        let can_sign = false;
+        if (req.user && item.current_signing_step_id) {
+          try {
+            can_sign = await checkSigningAuthorization(req.user, item);
+          } catch (authError) {
+            can_sign = false;
+          }
+        }
+        return {
+          ...item,
+          can_sign: !!can_sign,
+        };
+      })
+    );
     // --- END TRANSFORMATION ---
 
     res.status(200).json({
       success: true,
-      data: transformed, // Use the correct variable name
+      data: transformedWithCanSign,
       pagination: {
         total: filteredCount,
         page: parseInt(page),
