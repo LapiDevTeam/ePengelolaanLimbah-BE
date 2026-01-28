@@ -21,7 +21,7 @@ const { Op } = require("sequelize");
 const Sequelize = require('sequelize');
 
 const jakartaTime = require("../utils/jakartaTime");
-const { getWorkflowNamesByGroup } = require("../utils/golonganGroupMapping");
+const { getWorkflowNamesByGroup, getGolonganNamesByGroup } = require("../utils/golonganGroupMapping");
 
 const { determineSigningWorkflow } = require("./workflowController");
 
@@ -170,8 +170,20 @@ const checkSigningAuthorization = async (authorizingUser, beritaAcara) => {
  */
 const getAvailableRequestsForDailyLog = async (req, res) => {
   try {
-    // Accept optional query params: bagian (department) and tanggal (YYYY-MM-DD)
-    const { bagian, tanggal } = req.query;
+    // Accept optional query params: bagian (department), tanggal (YYYY-MM-DD), and group
+    const { bagian, tanggal, group } = req.query;
+
+    // Validate and resolve group parameter for golongan filtering
+    let golonganNames = null;
+    if (group) {
+      golonganNames = getGolonganNamesByGroup(group);
+      if (!golonganNames) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid group parameter: ${group}`,
+        });
+      }
+    }
 
     // Build base where clause (without status)
     const baseWhereClause = {
@@ -200,7 +212,13 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
         where: { ...baseWhereClause, status: "InProgress" },
         include: [
           { model: DetailLimbah },
-          { model: GolonganLimbah },
+          {
+            model: GolonganLimbah,
+            ...(golonganNames && {
+              where: { nama: { [Op.in]: golonganNames } },
+              required: true,
+            }),
+          },
           { model: JenisLimbahB3 },
           {
             model: ApprovalWorkflowStep,
@@ -234,7 +252,13 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
         where: { ...baseWhereClause, status: "Pembuatan BAP" },
         include: [
           { model: DetailLimbah },
-          { model: GolonganLimbah },
+          {
+            model: GolonganLimbah,
+            ...(golonganNames && {
+              where: { nama: { [Op.in]: golonganNames } },
+              required: true,
+            }),
+          },
           { model: JenisLimbahB3 },
           {
             model: ApprovalHistory,
@@ -264,7 +288,13 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
         where: { ...baseWhereClause, status: "InProgress" },
         include: [
           { model: DetailLimbah },
-          { model: GolonganLimbah },
+          {
+            model: GolonganLimbah,
+            ...(golonganNames && {
+              where: { nama: { [Op.in]: golonganNames } },
+              required: true,
+            }),
+          },
           { model: JenisLimbahB3 },
           {
             model: ApprovalWorkflowStep,
@@ -281,7 +311,13 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
         where: { ...baseWhereClause, status: "Pembuatan BAP" },
         include: [
           { model: DetailLimbah },
-          { model: GolonganLimbah },
+          {
+            model: GolonganLimbah,
+            ...(golonganNames && {
+              where: { nama: { [Op.in]: golonganNames } },
+              required: true,
+            }),
+          },
           { model: JenisLimbahB3 },
           {
             model: ApprovalHistory,
