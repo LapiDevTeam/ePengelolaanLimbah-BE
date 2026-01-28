@@ -167,11 +167,21 @@ const checkSigningAuthorization = async (authorizingUser, beritaAcara) => {
 /**
  * Get all completed requests that are available for daily log generation
  * GET /berita-acara/available-requests
+ * 
+ * IMPORTANT: This endpoint is for FILTERING only.
+ * - bagian: SINGLE department (string) - one BAP must belong to exactly one bagian
+ * - startDate/endDate: filter by verification completion date (ApprovalHistory.decision_date)
+ * - group: filter by golongan group
+ * 
+ * Cross-bagian Berita Acara is NOT allowed per business rules.
  */
 const getAvailableRequestsForDailyLog = async (req, res) => {
   try {
-    // Accept optional query params: bagian (department), tanggal (YYYY-MM-DD), and group
-    const { bagian, tanggal, group } = req.query;
+    // Accept optional query params: 
+    // - bagian: SINGLE department (string) - cross-bagian BAP is not allowed
+    // - tanggal (single date, backward compatible) OR startDate/endDate (date range)
+    // - group: golongan group filter
+    const { bagian, tanggal, startDate, endDate, group } = req.query;
 
     // Validate and resolve group parameter for golongan filtering
     let golonganNames = null;
@@ -190,7 +200,14 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
       berita_acara_id: null,
     };
 
-    if (bagian) baseWhereClause.bagian = bagian;
+    // Handle bagian as SINGLE string value only
+    // Business rule: One Berita Acara MUST belong to exactly one Bagian
+    // Cross-bagian BAP is NOT allowed
+    if (bagian) {
+      // If array is passed (legacy), only use the first value
+      const bagianValue = Array.isArray(bagian) ? bagian[0] : bagian;
+      baseWhereClause.bagian = bagianValue;
+    }
 
     // Container to store all available requests (InProgress at step 4 + Completed)
     let availableRequests = [];
@@ -200,12 +217,27 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
     // Also load in-progress requests waiting for HSE Manager (step_level 4)
     let inProgressAtStep4 = [];
 
-    if (tanggal) {
-      // If tanggal is provided, we need to filter by approval date of "Verifikasi Lapangan" step
+    // Determine date filtering: prefer startDate/endDate, fallback to tanggal
+    let start = null;
+    let end = null;
+    const hasDateFilter = (startDate && endDate) || tanggal;
+
+    if (startDate && endDate) {
+      // Date range filtering
+      const parsedStartIso = jakartaTime.parseJakartaLocal(`${startDate}T00:00:00`);
+      const parsedEndIso = jakartaTime.parseJakartaLocal(`${endDate}T23:59:59`);
+      start = parsedStartIso ? new Date(parsedStartIso) : new Date(`${startDate}T00:00:00+07:00`);
+      end = parsedEndIso ? new Date(parsedEndIso) : new Date(`${endDate}T23:59:59+07:00`);
+    } else if (tanggal) {
+      // Single date filtering (backward compatible)
       const parsedStartIso = jakartaTime.parseJakartaLocal(`${tanggal}T00:00:00`);
       const parsedEndIso = jakartaTime.parseJakartaLocal(`${tanggal}T23:59:59`);
-      const start = parsedStartIso ? new Date(parsedStartIso) : new Date(`${tanggal}T00:00:00+07:00`);
-      const end = parsedEndIso ? new Date(parsedEndIso) : new Date(`${tanggal}T23:59:59+07:00`);
+      start = parsedStartIso ? new Date(parsedStartIso) : new Date(`${tanggal}T00:00:00+07:00`);
+      end = parsedEndIso ? new Date(parsedEndIso) : new Date(`${tanggal}T23:59:59+07:00`);
+    }
+
+    if (hasDateFilter) {
+      // If date filter is provided, we need to filter by approval date of "Verifikasi Lapangan" step
 
       // First: Query InProgress requests at approval workflow step_level 4
       inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
@@ -275,13 +307,13 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
               status: "Approved",
               decision_date: { [Op.between]: [start, end] },
             },
-            required: true, // INNER JOIN to ensure we only get requests with approved Verifikasi Lapangan on this date
+            required: true, // INNER JOIN to ensure we only get requests with approved Verifikasi Lapangan in date range
           },
         ],
         order: [["created_at", "DESC"]],
       });
     } else {
-      // If no tanggal filter, load all available requests with ApprovalHistory (for consistent data structure)
+      // If no date filter, load all available requests with ApprovalHistory (for consistent data structure)
       
       // First: Query InProgress requests at approval workflow step_level 4
       inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
@@ -373,37 +405,41 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
               .join("; ")
           : "";
 
-      // Determine verification timestamp for info
-      // If we have ApprovalHistory for Verifikasi Lapangan, use the decision_date
-      // Otherwise fall back to SigningHistory or updated_at
-      let verificationTimestamp = reqItem.created_at;
+      // Determine verification timestamp from ApprovalHistory.decision_date for "Verifikasi Lapangan"
+      // This is the authoritative source for verification date
+      let verificationTimestamp = null;
 
       if (reqItem.ApprovalHistories && reqItem.ApprovalHistories.length > 0) {
-        // Find the Verifikasi Lapangan approval
-        const verifikasiApproval = reqItem.ApprovalHistories.find(
+        // Find the Verifikasi Lapangan approval - use the latest one if multiple exist
+        const verifikasiApprovals = reqItem.ApprovalHistories.filter(
           (ah) =>
             ah.ApprovalWorkflowStep &&
             ah.ApprovalWorkflowStep.step_level === 3 &&
-            ah.ApprovalWorkflowStep.step_name === "Verifikasi Lapangan"
+            ah.ApprovalWorkflowStep.step_name === "Verifikasi Lapangan" &&
+            ah.status === "Approved"
         );
-        if (verifikasiApproval && verifikasiApproval.decision_date) {
-          verificationTimestamp = new Date(verifikasiApproval.decision_date);
-        }
-      } else {
-        // Fallback to existing logic for older records or when no ApprovalHistory is loaded
-        const histories = signingHistoriesByBerita[reqItem.berita_acara_id] || [];
-        let latestSigned = null;
-        if (Array.isArray(histories) && histories.length > 0) {
-          latestSigned = histories.reduce((latest, h) => {
-            const d = h.signed_at ? new Date(h.signed_at) : null;
-            if (!d) return latest;
-            return !latest || d > latest ? d : latest;
+        
+        if (verifikasiApprovals.length > 0) {
+          // Get the latest verification date if multiple approvals exist
+          const latestVerification = verifikasiApprovals.reduce((latest, current) => {
+            if (!latest) return current;
+            const latestDate = latest.decision_date ? new Date(latest.decision_date) : null;
+            const currentDate = current.decision_date ? new Date(current.decision_date) : null;
+            if (!latestDate) return current;
+            if (!currentDate) return latest;
+            return currentDate > latestDate ? current : latest;
           }, null);
+          
+          if (latestVerification && latestVerification.decision_date) {
+            verificationTimestamp = new Date(latestVerification.decision_date);
+          }
         }
-        verificationTimestamp =
-          reqItem.status === "Completed" && reqItem.updated_at
-            ? new Date(reqItem.updated_at)
-            : latestSigned || reqItem.created_at;
+      }
+      
+      // Only use created_at as a display fallback (not for filtering) when no verification date exists
+      // This maintains backward compatibility for display purposes only
+      if (!verificationTimestamp) {
+        verificationTimestamp = reqItem.created_at;
       }
 
       return {
@@ -440,11 +476,29 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
  * that have not yet been assigned to a Berita Acara.
  * HSE Supervisor/Officer will be shown the list of requests before publishing.
  * No draft status - immediately moves to signing workflow.
+ * 
+ * IMPORTANT BUSINESS RULES:
+ * 1. One Berita Acara MUST belong to exactly one Bagian
+ * 2. All linked Permohonan MUST come from the same Bagian
+ * 3. Cross-bagian Berita Acara is NOT allowed
+ * 4. tanggal is DERIVED from ApprovalHistory, not user input
  */
 const createBeritaAcara = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
-    const { bagian, tanggal, waktu, lokasi_verifikasi, selectedRequestIds } = req.body;
+    // =========================================================================
+    // REQUEST BODY PARSING
+    // =========================================================================
+    // NOTE: tanggal is NOT taken from request body.
+    // It is DERIVED from ApprovalHistory.decision_date to ensure data integrity.
+    // 
+    // Rationale:
+    //   - The date range (startDate/endDate) in /available-requests is for FILTERING only
+    //   - The actual BAP document should reflect when verification was completed
+    //   - This prevents user from backdating or future-dating the BAP
+    //   - Ensures: /available-requests = filter, createBeritaAcara = snapshot + linking
+    // =========================================================================
+    const { waktu, lokasi_verifikasi, selectedRequestIds } = req.body;
     const { user, delegatedUser } = req;
 
     // Validate authenticated user presence
@@ -482,28 +536,30 @@ const createBeritaAcara = async (req, res) => {
     }
 
     // Basic server-side validation for required fields from the form
-    if (!bagian || !tanggal || !waktu || !lokasi_verifikasi) {
+    // NOTE: bagian is DERIVED from selected requests (validated for single-bagian)
+    // NOTE: tanggal is DERIVED from ApprovalHistory.decision_date
+    if (!waktu || !lokasi_verifikasi) {
       await transaction.rollback();
       return res
         .status(400)
-        .json({ message: "Missing required fields: bagian, tanggal, waktu, or lokasi_verifikasi." });
+        .json({ message: "Missing required fields: waktu or lokasi_verifikasi." });
     }
 
-    // Parse and validate tanggal and waktu into Date objects before proceeding.
-    let tanggalDate = null;
-    let waktuDate = null;
-    // Robust parsing: treat 'tanggal' (YYYY-MM-DD) as local date components
-    const parseLocalDate = (dstr) => {
-      const iso = jakartaTime.parseJakartaLocal(String(dstr));
-      return iso ? new Date(iso) : null;
-    };
+    // Validate selectedRequestIds is provided
+    if (!selectedRequestIds || !Array.isArray(selectedRequestIds) || selectedRequestIds.length === 0) {
+      await transaction.rollback();
+      return res
+        .status(400)
+        .json({ message: "selectedRequestIds is required and must contain at least one request ID." });
+    }
 
+    // Parse and validate waktu into Date object before proceeding.
+    let waktuDate = null;
     const parseLocalDateTime = (dtstr) => {
       const iso = jakartaTime.parseJakartaLocal(String(dtstr));
       return iso ? new Date(iso) : null;
     };
 
-    tanggalDate = parseLocalDate(tanggal);
     waktuDate = parseLocalDateTime(waktu);
 
     // Common client bug: times like '2025-09-26T15:09:52:00' (extra ':00')
@@ -516,11 +572,6 @@ const createBeritaAcara = async (req, res) => {
       }
     }
 
-    if (!tanggalDate || isNaN(tanggalDate.getTime())) {
-      await transaction.rollback();
-      return res.status(400).json({ message: "Invalid tanggal format. Expected YYYY-MM-DD or ISO date." });
-    }
-
     if (!waktuDate || isNaN(waktuDate.getTime())) {
       await transaction.rollback();
       return res
@@ -529,67 +580,39 @@ const createBeritaAcara = async (req, res) => {
     }
 
     // 1. Find selected completed requests that don't have a Berita Acara yet.
+    // Since selectedRequestIds is required, we only query for those specific IDs
     let inProgressAtStep4 = [];
     let completedRequests = [];
-    if (selectedRequestIds && selectedRequestIds.length > 0) {
-      // First, check for requests that are in progress at step 4
-      inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
-        where: {
-          request_id: selectedRequestIds,
-          status: "InProgress",
-          berita_acara_id: null,
+
+    // First, check for requests that are in progress at step 4
+    inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
+      where: {
+        request_id: selectedRequestIds,
+        status: "InProgress",
+        berita_acara_id: null,
+      },
+      include: [
+        { model: GolonganLimbah },
+        { model: JenisLimbahB3 },
+        {
+          model: ApprovalWorkflowStep,
+          as: "CurrentStep",
+          where: { step_level: 4 },
+          required: true,
         },
-        include: [
-          { model: GolonganLimbah },
-          { model: JenisLimbahB3 },
-          {
-            model: ApprovalWorkflowStep,
-            as: "CurrentStep",
-            where: { step_level: 4 },
-            required: true,
-          },
-        ],
-        transaction,
-      });
-      // Then, get selected requests with status 'Pembuatan BAP'
-      completedRequests = await PermohonanPemusnahanLimbah.findAll({
-        where: {
-          request_id: selectedRequestIds,
-          status: "Pembuatan BAP",
-          berita_acara_id: null,
-        },
-        include: [{ model: GolonganLimbah }, { model: JenisLimbahB3 }],
-        transaction,
-      });
-    } else {
-      // Get all available in-progress requests at step 4
-      inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
-        where: {
-          status: "InProgress",
-          berita_acara_id: null,
-        },
-        include: [
-          { model: GolonganLimbah },
-          { model: JenisLimbahB3 },
-          {
-            model: ApprovalWorkflowStep,
-            as: "CurrentStep",
-            where: { step_level: 4 },
-            required: true,
-          },
-        ],
-        transaction,
-      });
-      // Get all available requests with status 'Pembuatan BAP'
-      completedRequests = await PermohonanPemusnahanLimbah.findAll({
-        where: {
-          status: "Pembuatan BAP",
-          berita_acara_id: null,
-        },
-        include: [{ model: GolonganLimbah }, { model: JenisLimbahB3 }],
-        transaction,
-      });
-    }
+      ],
+      transaction,
+    });
+    // Then, get selected requests with status 'Pembuatan BAP'
+    completedRequests = await PermohonanPemusnahanLimbah.findAll({
+      where: {
+        request_id: selectedRequestIds,
+        status: "Pembuatan BAP",
+        berita_acara_id: null,
+      },
+      include: [{ model: GolonganLimbah }, { model: JenisLimbahB3 }],
+      transaction,
+    });
 
     // Combine all available requests
     let availableRequests = [...inProgressAtStep4, ...completedRequests];
@@ -598,6 +621,38 @@ const createBeritaAcara = async (req, res) => {
       await transaction.rollback();
       return res.status(404).json({ message: "No available requests found to generate a Berita Acara." });
     }
+
+    // =========================================================================
+    // SINGLE-BAGIAN VALIDATION
+    // =========================================================================
+    // Business Rule: One Berita Acara MUST belong to exactly one Bagian.
+    // All linked Permohonan MUST come from the same Bagian.
+    // Cross-bagian Berita Acara is NOT allowed.
+    // 
+    // Rationale:
+    //   - BAP document is department-specific for accountability
+    //   - Signing workflow may differ based on department
+    //   - Regulatory compliance requires clear department ownership
+    // =========================================================================
+    const distinctBagian = [...new Set(availableRequests.map(r => (r.bagian || "").toString().toUpperCase()))];
+    
+    if (distinctBagian.length === 0 || (distinctBagian.length === 1 && distinctBagian[0] === "")) {
+      await transaction.rollback();
+      return res.status(400).json({ 
+        message: "Cannot create Berita Acara: selected requests have no bagian information." 
+      });
+    }
+    
+    if (distinctBagian.length > 1) {
+      await transaction.rollback();
+      return res.status(400).json({ 
+        message: `Cannot create Berita Acara: selected requests come from multiple departments (${distinctBagian.join(", ")}). ` +
+                 `One Berita Acara must belong to exactly one department. Please select requests from a single department only.`
+      });
+    }
+    
+    // Derive bagian from the selected requests (single value, validated above)
+    const derivedBagian = distinctBagian[0];
 
     // Find the latest request (by created_at) to extract verification data
     const latestRequest = availableRequests.reduce((latest, current) => {
@@ -647,6 +702,52 @@ const createBeritaAcara = async (req, res) => {
       });
     }
 
+    // =========================================================================
+    // DERIVE tanggal FROM ApprovalHistory
+    // =========================================================================
+    // The BAP tanggal (date) is DERIVED from the LATEST verification completion date
+    // across ALL selected requests, NOT from user input.
+    // 
+    // Rationale:
+    //   - The date range (startDate/endDate) in /available-requests is for FILTERING only
+    //   - The actual BAP document should reflect when verification was completed
+    //   - This ensures data integrity: BAP date = actual verification completion date
+    //   - Prevents user from backdating or future-dating the BAP
+    //   - Clear separation: /available-requests = filter, createBeritaAcara = snapshot
+    // =========================================================================
+    let derivedTanggalDate = null;
+    const allRequestIds = availableRequests.map((r) => r.request_id);
+
+    // Query for the latest decision_date from "Verifikasi Lapangan" step across all selected requests
+    const latestVerificationHistory = await ApprovalHistory.findOne({
+      where: {
+        request_id: { [Op.in]: allRequestIds },
+        status: "Approved",
+      },
+      include: [
+        {
+          model: ApprovalWorkflowStep,
+          where: {
+            step_name: "Verifikasi Lapangan",
+          },
+        },
+      ],
+      order: [["decision_date", "DESC"]],
+      transaction,
+    });
+
+    if (latestVerificationHistory && latestVerificationHistory.decision_date) {
+      derivedTanggalDate = new Date(latestVerificationHistory.decision_date);
+    } else {
+      // Fallback: if no verification history found, use current Jakarta date
+      // This should rarely happen as requests should have passed verification
+      console.warn(
+        `[createBeritaAcara] No verification history found for requests: ${allRequestIds.join(", ")}. ` +
+          `Using current Jakarta date as fallback.`
+      );
+      derivedTanggalDate = new Date(jakartaTime.now());
+    }
+
     // Determine the appropriate signing workflow based on all available requests
     const signingWorkflowId = await determineSigningWorkflow(availableRequests);
 
@@ -669,9 +770,12 @@ const createBeritaAcara = async (req, res) => {
 
     // 2. Create the new Berita Acara record
     const beritaPayload = {
-      bagian,
-      // Store Jakarta-local timestamps explicitly by converting back to Date from Jakarta ISO
-      tanggal: tanggalDate ? new Date(jakartaTime.formatJakartaISO(tanggalDate)) : null,
+      // bagian is DERIVED from selected requests (validated for single-bagian above)
+      bagian: derivedBagian,
+      // tanggal is DERIVED from ApprovalHistory.decision_date (latest verification completion)
+      // NOT from user input - ensures data integrity and prevents backdating
+      tanggal: derivedTanggalDate ? new Date(jakartaTime.formatJakartaISO(derivedTanggalDate)) : null,
+      // waktu is from user input (time of BAP creation)
       waktu: waktuDate ? new Date(jakartaTime.formatJakartaISO(waktuDate)) : null,
       lokasi_verifikasi,
       // Auto-fill from latest request's verification data
