@@ -71,10 +71,44 @@ const getWorkflowNamesByGroup = (group) => {
   return WORKFLOW_NAME_MAP[group];
 };
 
+/**
+ * Determine which group a golongan belongs to (reverse lookup)
+ * @param {string} golonganName - The golongan name
+ * @returns {string|null} The group key ('limbah-b3', 'recall', 'recall-precursor') or null
+ */
+const determineGroupFromGolongan = (golonganName) => {
+  if (!golonganName) return null;
+  
+  const lowerName = String(golonganName).toLowerCase();
+  
+  // Check each group
+  for (const [group, golonganList] of Object.entries(GOLONGAN_GROUP_MAP)) {
+    if (golonganList.some(g => String(g).toLowerCase() === lowerName)) {
+      return group;
+    }
+  }
+  
+  // Fallback: pattern matching for edge cases
+  if (lowerName.includes('recall') && lowerName.includes('prekursor')) {
+    return 'recall-precursor';
+  }
+  if (lowerName.includes('prekursor') || lowerName.includes('oot')) {
+    return 'recall-precursor';
+  }
+  if (lowerName.includes('recall')) {
+    return 'recall';
+  }
+  
+  // Default to limbah-b3 for unknown golongan
+  return 'limbah-b3';
+};
+
 module.exports = {
   GOLONGAN_GROUP_MAP,
   WORKFLOW_NAME_MAP,
   getGolonganNamesByGroup,
   isGolonganInGroup,
-  getWorkflowNamesByGroup
+  getWorkflowNamesByGroup,
+  determineGroupFromGolongan
 };
+

@@ -15,6 +15,10 @@ const {
 const { determineApprovalWorkflow } = require('./workflowController');
 const { generateNomorPermohonan } = require('../utils/nomorPermohonanGenerator');
 const { getGolonganNamesByGroup } = require('../utils/golonganGroupMapping');
+const { 
+    checkUserCanApproveRequest, 
+    hasUserProcessedCurrentStep 
+} = require('../services/approvalAuthorizationService');
 
 // --- Helper Function for External API Authorization ---
 const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
@@ -466,217 +470,52 @@ const getAllPermohonan = async (req, res) => {
       }
     }
 
-    // Enhanced pendingApproval filtering with external API
+    // Enhanced pendingApproval filtering with unified authorization service
     if (!isVerificationOnly && (pendingApproval === 'true' || pendingApproval === true)) {
-      try {
-        const axios = require('axios');
-        const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
-        
-        // Get all requests that are InProgress first
-        // Merge with existing whereClause if it exists (from search filters)
-        const inProgressConditions = {
-          status: 'InProgress',
-          current_step_id: {
-            [require('sequelize').Op.ne]: null
-          }
+      // Simplified approach: fetch all InProgress requests, then filter using service
+      const inProgressConditions = {
+        status: 'InProgress',
+        current_step_id: {
+          [require('sequelize').Op.ne]: null
+        }
+      };
+      
+      if (Object.keys(queryOptions.where).length > 0) {
+        // Combine with existing search conditions
+        queryOptions.where = {
+          [Op.and]: [
+            queryOptions.where,
+            inProgressConditions
+          ]
         };
-        
-        if (Object.keys(queryOptions.where).length > 0) {
-          // Combine with existing search conditions using Op.and
-          queryOptions.where = {
-            [Op.and]: [
-              queryOptions.where,
-              inProgressConditions
-            ]
-          };
-        } else {
-          queryOptions.where = inProgressConditions;
-        }
-        
-        // Remove existing CurrentStep includes
-        queryOptions.include = queryOptions.include.filter(include => 
-          !(include.as === 'CurrentStep')
-        );
-        
-        try {
-          // Fetch external API data
-          const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
-          const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
-          
-          // Filter for ePengelolaan_Limbah approvers
-          const appItems = items.filter(i => String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah');
-          
-          // Find which step levels this user can approve at
-          const userApprovalSteps = appItems
-            .filter(item => item.Appr_ID === filteringUser.log_NIK)
-            .map(item => item.Appr_No)
-            .filter(stepNo => stepNo != null);
-          
-          // For department managers (step 1), also find which departments they can approve for
-          const userDepartmentApprovals = appItems
-            .filter(item => 
-              item.Appr_ID === filteringUser.log_NIK && 
-              item.Appr_No === 1 // Department manager level
-            )
-            .map(item => item.Appr_DeptID)
-            .filter(deptId => deptId != null);
-          
-          if (userApprovalSteps.length > 0) {
-            // Build query to get pending approvals based on step levels and additional filters
-            const canApproveManager = userApprovalSteps.includes(1);
-            const canApproveAPJ = userApprovalSteps.includes(2);
-            const canApproveVerification = userApprovalSteps.includes(3);
-            const canApproveHSE = userApprovalSteps.includes(4);
-
-            // Always include CurrentStep with step_level filter
-
-            queryOptions.include.push({
-              model: ApprovalWorkflowStep,
-              as: 'CurrentStep',
-              required: true,
-              where: {
-                step_level: {
-                  [require('sequelize').Op.in]: userApprovalSteps
-                }
-              },
-              include: [{
-                model: ApprovalWorkflowApprover,
-                required: false
-              }]
-            });
-            
-            // Build complex WHERE conditions using OR logic for different step levels
-            const Op = require('sequelize').Op;
-            const stepConditions = [];
-
-            // Step 1 (Department Manager): filter by department
-            if (canApproveManager && userDepartmentApprovals.length > 0) {
-              stepConditions.push({
-                [Op.and]: [
-                  { '$CurrentStep.step_level$': 1 },
-                  { bagian: { [Op.in]: userDepartmentApprovals } }
-                ]
-              });
-            }
-
-            // Step 2 (APJ): filter by golongan based on department
-            if (canApproveAPJ) {
-              const userAPJDepts = appItems
-                .filter(item => item.Appr_ID === filteringUser.log_NIK && item.Appr_No === 2)
-                .map(i => (i.Appr_DeptID || '').toString().toUpperCase())
-                .filter(Boolean);
-
-              if (userAPJDepts.length > 0) {
-                const golonganConditions = [];
-                
-                if (userAPJDepts.includes('PN1')) {
-                  golonganConditions.push({ '$GolonganLimbah.nama$': { [Op.iLike]: '%prekursor%' } });
-                  golonganConditions.push({ '$GolonganLimbah.nama$': { [Op.iLike]: '%oot%' } });
-                }
-                if (userAPJDepts.includes('QA')) {
-                  golonganConditions.push({ '$GolonganLimbah.nama$': { [Op.iLike]: '%recall%' } });
-                }
-                if (userAPJDepts.includes('HC')) {
-                  golonganConditions.push({ is_produk_pangan: true });
-                }
-
-                if (golonganConditions.length > 0) {
-                  stepConditions.push({
-                    [Op.and]: [
-                      { '$CurrentStep.step_level$': 2 },
-                      { [Op.or]: golonganConditions }
-                    ]
-                  });
-                }
-              }
-            }
-
-            // Step 3 (Verifikasi Lapangan): no additional filter, all verification requests visible
-            if (canApproveVerification) {
-              stepConditions.push({
-                '$CurrentStep.step_level$': 3
-              });
-            }
-
-            // Step 4 (HSE Manager): no additional filter, all HSE approval requests visible
-            if (canApproveHSE) {
-              stepConditions.push({
-                '$CurrentStep.step_level$': 4
-              });
-            }
-
-            // Apply OR conditions if we have multiple step filters
-            if (stepConditions.length > 0) {
-              // If user can approve multiple steps, use OR to combine conditions
-              if (stepConditions.length > 1) {
-                queryOptions.where[Op.or] = stepConditions;
-              } else {
-                // If only one step condition, apply it directly
-                Object.assign(queryOptions.where, stepConditions[0]);
-              }
-            }
-
-          } else {
-            // User not found in external API, use database fallback
-            throw new Error('User not found in external approval API');
-          }
-          
-        } catch (apiError) {
-          console.warn('[getAllPermohonan] External API failed, using database fallback:', apiError.message);
-          
-          // Fallback to database-based filtering
-          // Use a simplified approach to avoid complex nested queries
-          const Op = require('sequelize').Op;
-          
-          queryOptions.include.push({
-            model: ApprovalWorkflowStep,
-            as: 'CurrentStep',
-            required: true,
-            include: [{
-              model: ApprovalWorkflowApprover,
-              required: true,
-              where: {
-                [Op.or]: [
-                  // Direct approver matches
-                  { approver_id: filteringUser.log_NIK },
-                  { approver_identity: filteringUser.log_NIK },
-                  // Department matches (simplified - check in post-processing if needed)
-                  { approver_dept_id: filteringUser.emp_DeptID },
-                  // KL department can access verification steps
-                  { approver_dept_id: 'KL' }
-                ]
-              }
-            }]
-          });
-          
-          // For PJKPO (HC department) users, filter for produk pangan only
-          if (filteringUser.emp_DeptID === 'HC') {
-            queryOptions.where.is_produk_pangan = true;
-          }
-        }
-        
-      } catch (error) {
-        console.error('[getAllPermohonan] Error in pendingApproval filtering:', error);
-        // Ultimate fallback
-        queryOptions.where.status = 'InProgress';
-        queryOptions.include.push({
+      } else {
+        queryOptions.where = inProgressConditions;
+      }
+      
+      // Remove existing CurrentStep includes to avoid conflicts
+      queryOptions.include = queryOptions.include.filter(include => 
+        !(include.as === 'CurrentStep')
+      );
+      
+      // Add required includes for authorization service
+      queryOptions.include.push(
+        {
           model: ApprovalWorkflowStep,
           as: 'CurrentStep',
-          required: true,
-          include: [{
-            model: ApprovalWorkflowApprover,
-            required: true,
-            where: {
-              approver_id: filteringUser.log_NIK
-            }
-          }]
-        });
-        
-        // For PJKPO (HC department) users, filter for produk pangan only
-        if (filteringUser.emp_DeptID === 'HC') {
-          queryOptions.where.is_produk_pangan = true;
+          required: true
+        },
+        {
+          model: GolonganLimbah,
+          required: false
+        },
+        {
+          model: ApprovalHistory,
+          required: false
         }
-      }
+      );
+      
+      // Mark that we need post-processing
+      const needsAuthorizationFilter = true;
     }
 
     // For pending approvals, exclude requests that the current user has already processed
@@ -740,83 +579,36 @@ const getAllPermohonan = async (req, res) => {
     }
     
     if (pendingApproval === 'true' || pendingApproval === true) {
-      // Pending: exclude only if user approved CURRENT step
-      filteredList = filteredList.filter(request => {
-        const currentStepId = request.current_step_id;
-        const histories = Array.isArray(request.ApprovalHistories) ? request.ApprovalHistories : [];
-        
-        // Check if user has already processed the CURRENT step
-        const hasProcessedCurrentStep = histories.some(h => {
-          const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
-          const matchesUser = approverIds.includes(String(filteringUser.log_NIK));
-          const isProcessed = ['Approved', 'Rejected'].includes(h.status);
-          const matchesCurrentStep = currentStepId && String(h.step_id) === String(currentStepId);
-          
-          return matchesUser && isProcessed && matchesCurrentStep;
-        });
-        
-        // Only show if they haven't processed current step
-        return !hasProcessedCurrentStep;
-      });
+      // Use unified authorization service for filtering
+      const authorizedRequests = [];
       
-      filteredCount = filteredList.length;
+      for (const request of filteredList) {
+        const canApprove = await checkUserCanApproveRequest(filteringUser.log_NIK, request);
+        const hasProcessed = hasUserProcessedCurrentStep(request, filteringUser.log_NIK);
+        
+        if (canApprove && !hasProcessed) {
+          authorizedRequests.push(request);
+        }
+      }
+      
+      filteredList = authorizedRequests;
+      filteredCount = authorizedRequests.length;
     }
     
     if (processedBy === 'true' || processedBy === true) {
-      // Approved: show ALL requests where user has approved OR rejected at their step
-      // EXCEPT if current step also needs user's approval but hasn't been processed yet
-      // (in that case, it should be in Pending Approvals instead)
-      // NOTE: Search filters have already been applied at the database level
-      
-      if (filteredList.length === 0) {
-        filteredCount = 0;
-      } else {
-        // Need to fetch user's approval authority to check current step
-        // to exclude requests where user still needs to process at current step
-        try {
-          const axios = require('axios');
-          const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
-          const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
-          const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
-          const appItems = items.filter(i => String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah');
-          const userApprovals = appItems.filter(item => item.Appr_ID === filteringUser.log_NIK);
-          const userApprovalSteps = userApprovals.map(item => item.Appr_No).filter(stepNo => stepNo != null);
-          
-          filteredList = filteredList.filter(request => {
-            // If no current step (completed/rejected), always show in Processed
-            if (!request.current_step_id || !request.CurrentStep) {
-              return true;
-            }
-            
-            const currentStepLevel = request.CurrentStep.step_level;
-            
-            // If current step is not in user's approval authority, show in Processed
-            if (!userApprovalSteps.includes(currentStepLevel)) {
-              return true;
-            }
-            
-            // Current step needs user's approval - check if already processed (approved or rejected)
-            const histories = Array.isArray(request.ApprovalHistories) ? request.ApprovalHistories : [];
-            const hasProcessedCurrentStep = histories.some(h => {
-              const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
-              const matchesUser = approverIds.includes(String(filteringUser.log_NIK));
-              const isProcessed = ['Approved', 'Rejected'].includes(h.status);
-              const matchesCurrentStep = String(h.step_id) === String(request.current_step_id);
-              return matchesUser && isProcessed && matchesCurrentStep;
-            });
-            
-            // Only show in Processed if user has already processed current step
-            return hasProcessedCurrentStep;
-          });
-          
-          filteredCount = filteredList.length;
-        } catch (apiError) {
-          console.warn('[processedBy filter] External API check failed:', apiError.message);
-          // If API fails, just use the results from database filter
-          // The search filter was already applied at DB level
-          filteredCount = filteredList.length;
+      // Use unified service to check if user already processed current step
+      filteredList = filteredList.filter(request => {
+        // If no current step (completed/rejected), always show in Processed
+        if (!request.current_step_id || !request.CurrentStep) {
+          return true;
         }
-      }
+        
+        // Check if user already processed current step using service
+        const hasProcessedCurrent = hasUserProcessedCurrentStep(request, filteringUser.log_NIK);
+        return hasProcessedCurrent;
+      });
+      
+      filteredCount = filteredList.length;
     }
     
     // Apply pagination AFTER filtering for processedBy

@@ -1,16 +1,23 @@
 const {
     PermohonanPemusnahanLimbah,
     ApprovalWorkflowStep,
-    ApprovalHistory
+    ApprovalHistory,
+    GolonganLimbah
 } = require('../models');
 const { Op } = require('sequelize');
+const { 
+    checkUserCanApproveRequest, 
+    hasUserProcessedCurrentStep,
+    hasApprovalAuthority: checkHasApprovalAuthority
+} = require('../services/approvalAuthorizationService');
+const { determineGroupFromGolongan } = require('../utils/golonganGroupMapping');
 
 /**
  * Get dashboard statistics for the current user
  * Returns counts for:
- * - My Requests: Total requests created by the user
- * - Pending Approvals: Requests waiting for user's approval
- * - Approved: Requests already approved by the user
+ * - My Requests: Total requests created by the user (with group breakdown)
+ * - Pending Approvals: Requests waiting for user's approval (with group breakdown)
+ * - Approved: Requests already approved by the user (with group breakdown)
  */
 exports.getDashboardStats = async (req, res) => {
     try {
@@ -24,53 +31,50 @@ exports.getDashboardStats = async (req, res) => {
             });
         }
 
-        // 1. Count "My Requests" - all requests created by this user
+        // Initialize group breakdowns
+        const initGroupBreakdown = () => ({
+            'limbah-b3': 0,
+            'recall': 0,
+            'recall-precursor': 0
+        });
+
+        // 1. Count "My Requests" - all requests created by this user (with group breakdown)
         let myRequestsCount = 0;
+        const myRequestsByGroup = initGroupBreakdown();
         
         try {
-            myRequestsCount = await PermohonanPemusnahanLimbah.count({
-                where: {
-                    requester_id: userId
-                }
+            const myRequests = await PermohonanPemusnahanLimbah.findAll({
+                where: { requester_id: userId },
+                include: [{
+                    model: GolonganLimbah,
+                    required: false
+                }]
             });
+
+            myRequestsCount = myRequests.length;
+
+            // Group by golongan
+            for (const request of myRequests) {
+                const golonganName = request.GolonganLimbah?.nama;
+                const group = determineGroupFromGolongan(golonganName);
+                if (group && myRequestsByGroup.hasOwnProperty(group)) {
+                    myRequestsByGroup[group]++;
+                }
+            }
         } catch (countError) {
-            console.error('[getDashboardStats] Error counting requests:', countError.message);
-            myRequestsCount = 0;
+            console.error('[getDashboardStats] Error counting my requests:', countError.message);
         }
 
         // 2. Count "Pending Approvals" - requests waiting for this user's approval
-        // Use the same logic as permohonanController's pendingApproval filter
         let pendingApprovalsCount = 0;
+        const pendingApprovalsByGroup = initGroupBreakdown();
         
-        // Check if user has approval authority using external API
-        let hasApprovalAuthority = false;
-        let userApprovals = [];
+        // Check if user has approval authority
+        const hasApprovalAuth = await checkHasApprovalAuthority(userId, userJobLevel);
         
-        try {
-            const axios = require('axios');
-            const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
-            const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
-            const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
-            
-            // Filter for ePengelolaan_Limbah approvers
-            const appItems = items.filter(i => String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah');
-            userApprovals = appItems.filter(item => item.Appr_ID === userId);
-            
-            hasApprovalAuthority = userApprovals.length > 0 || userId === "PJKPO";
-        } catch (apiError) {
-            console.warn('[getDashboardStats] External API check failed:', apiError.message);
-            // Fallback: Check by job level (Manager level = 3 or below usually has approval authority)
-            hasApprovalAuthority = userJobLevel && parseInt(userJobLevel) <= 4;
-        }
-        
-        if (hasApprovalAuthority && userApprovals.length > 0) {
+        if (hasApprovalAuth) {
             try {
-                // Get step levels this user can approve
-                const userApprovalSteps = userApprovals
-                    .map(item => item.Appr_No)
-                    .filter(stepNo => stepNo != null);
-                
-                // Get all InProgress requests with current step matching user's approval levels
+                // Fetch all InProgress requests with necessary includes
                 const pendingRequests = await PermohonanPemusnahanLimbah.findAll({
                     where: {
                         status: 'InProgress',
@@ -80,103 +84,57 @@ exports.getDashboardStats = async (req, res) => {
                         {
                             model: ApprovalWorkflowStep,
                             as: 'CurrentStep',
-                            required: true,
-                            where: {
-                                step_level: {
-                                    [Op.in]: userApprovalSteps
-                                }
-                            }
+                            required: true
                         },
                         {
-                            model: require('../models').GolonganLimbah,
+                            model: GolonganLimbah,
+                            required: false
+                        },
+                        {
+                            model: ApprovalHistory,
                             required: false
                         }
                     ]
                 });
 
-                // Filter based on specific rules per step level
-                const authorizedPendingRequests = pendingRequests.filter(request => {
-                    const currentStepLevel = request.CurrentStep?.step_level;
+                // Filter using unified service
+                const userPendingRequests = [];
+                for (const request of pendingRequests) {
+                    const canApprove = await checkUserCanApproveRequest(userId, request);
+                    const hasProcessed = hasUserProcessedCurrentStep(request, userId);
                     
-                    // Step 1 (Department Manager): check department matching
-                    if (currentStepLevel === 1) {
-                        const userDepartments = userApprovals
-                            .filter(a => a.Appr_No === 1)
-                            .map(a => (a.Appr_DeptID || '').toString().toUpperCase());
-                        
-                        const requestDepartment = (request.bagian || request.requester_dept_id || '').toString().toUpperCase();
-                        return userDepartments.includes(requestDepartment);
+                    if (canApprove && !hasProcessed) {
+                        userPendingRequests.push(request);
                     }
-                    
-                    // Step 2 (APJ): check golongan based on department
-                    if (currentStepLevel === 2) {
-                        const userAPJDepts = userApprovals
-                            .filter(a => a.Appr_No === 2)
-                            .map(a => (a.Appr_DeptID || '').toString().toUpperCase());
-                        
-                        const golonganName = (request.GolonganLimbah?.nama || '').toLowerCase();
-                        
-                        // Check if user can approve based on golongan and department
-                        if (userAPJDepts.includes('PN1')) {
-                            if (golonganName.includes('prekursor') || golonganName.includes('oot')) {
-                                return true;
-                            }
-                        }
-                        if (userAPJDepts.includes('QA')) {
-                            if (golonganName.includes('recall')) {
-                                return true;
-                            }
-                        }
-                        if (userAPJDepts.includes('HC')) {
-                            if (request.is_produk_pangan) {
-                                return true;
-                            }
-                        }
-                        
-                        return false;
-                    }
-                    
-                    // Step 3 (Verification) and Step 4 (HSE Manager): any user with authority can approve
-                    return true;
-                });
+                }
 
-                pendingApprovalsCount = authorizedPendingRequests.length;
+                pendingApprovalsCount = userPendingRequests.length;
+
+                // Group by golongan
+                for (const request of userPendingRequests) {
+                    const golonganName = request.GolonganLimbah?.nama;
+                    const group = determineGroupFromGolongan(golonganName);
+                    if (group && pendingApprovalsByGroup.hasOwnProperty(group)) {
+                        pendingApprovalsByGroup[group]++;
+                    }
+                }
             } catch (pendingError) {
                 console.error('[getDashboardStats] Error checking pending approvals:', pendingError.message);
-                pendingApprovalsCount = 0;
             }
         }
 
-        // 3. Count "Approved" - requests that user has already processed (approved or rejected) at their step
-        // Show ALL requests where user has approved or rejected at ANY step that matches their approval authority
-        // EXCEPT if current step also needs user's approval and hasn't been processed yet
-        // (in that case, it should be in Pending Approvals instead)
+        // 3. Count "Approved" - requests that user has already processed
         let approvedCount = 0;
+        const approvedByGroup = initGroupBreakdown();
         
-        if (hasApprovalAuthority && userApprovals.length > 0) {
+        if (hasApprovalAuth) {
             try {
-                // Get step levels this user can approve
-                const userApprovalSteps = userApprovals
-                    .map(item => item.Appr_No)
-                    .filter(stepNo => stepNo != null);
-                
-                // Get all requests where user has processed (approved or rejected) at their step level
+                // Get all requests where user has processed (approved or rejected)
                 const approvedRequests = await PermohonanPemusnahanLimbah.findAll({
                     include: [
                         {
                             model: ApprovalHistory,
                             required: true,
-                            include: [
-                                {
-                                    model: ApprovalWorkflowStep,
-                                    required: true,
-                                    where: {
-                                        step_level: {
-                                            [Op.in]: userApprovalSteps
-                                        }
-                                    }
-                                }
-                            ],
                             where: {
                                 [Op.and]: [
                                     {
@@ -197,6 +155,10 @@ exports.getDashboardStats = async (req, res) => {
                             model: ApprovalWorkflowStep,
                             as: 'CurrentStep',
                             required: false
+                        },
+                        {
+                            model: GolonganLimbah,
+                            required: false
                         }
                     ],
                     where: {
@@ -205,47 +167,52 @@ exports.getDashboardStats = async (req, res) => {
                 });
 
                 // Filter out requests where current step needs user's approval but hasn't been processed yet
-                // (those should be in Pending Approvals)
                 const filteredApproved = approvedRequests.filter(request => {
                     // If no current step (completed), always show in Approved
                     if (!request.current_step_id || !request.CurrentStep) {
                         return true;
                     }
                     
-                    const currentStepLevel = request.CurrentStep.step_level;
-                    
-                    // If current step is not in user's approval authority, show in Approved
-                    if (!userApprovalSteps.includes(currentStepLevel)) {
-                        return true;
-                    }
-                    
-                    // Current step needs user's approval - check if already processed
-                    const histories = Array.isArray(request.ApprovalHistories) ? request.ApprovalHistories : [];
-                    const hasProcessedCurrentStep = histories.some(h => {
-                        const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
-                        const matchesUser = approverIds.includes(String(userId));
-                        const isProcessed = ['Approved', 'Rejected'].includes(h.status);
-                        const matchesCurrentStep = String(h.step_id) === String(request.current_step_id);
-                        return matchesUser && isProcessed && matchesCurrentStep;
-                    });
-                    
-                    // Only show in Approved if user has already processed current step
-                    return hasProcessedCurrentStep;
+                    // Check if user already processed current step
+                    const hasProcessedCurrent = hasUserProcessedCurrentStep(request, userId);
+                    return hasProcessedCurrent;
                 });
 
                 approvedCount = filteredApproved.length;
+
+                // Group by golongan
+                for (const request of filteredApproved) {
+                    const golonganName = request.GolonganLimbah?.nama;
+                    const group = determineGroupFromGolongan(golonganName);
+                    if (group && approvedByGroup.hasOwnProperty(group)) {
+                        approvedByGroup[group]++;
+                    }
+                }
             } catch (approvedError) {
                 console.error('[getDashboardStats] Error checking approved count:', approvedError.message);
-                approvedCount = 0;
             }
         }
 
+        // Return enhanced stats with group breakdowns
         return res.json({
             success: true,
             data: {
-                myRequests: myRequestsCount,
-                pendingApprovals: pendingApprovalsCount,
-                approved: approvedCount
+                myRequests: {
+                    total: myRequestsCount,
+                    byGroup: myRequestsByGroup
+                },
+                pendingApprovals: {
+                    total: pendingApprovalsCount,
+                    byGroup: pendingApprovalsByGroup
+                },
+                approved: {
+                    total: approvedCount,
+                    byGroup: approvedByGroup
+                },
+                // Legacy fields for backward compatibility
+                myRequestsCount,
+                pendingApprovalsCount,
+                approvedCount
             }
         });
 
