@@ -193,6 +193,115 @@ exports.getDashboardStats = async (req, res) => {
             }
         }
 
+        // 4. Count "Waiting HSE Manager" - requests at step 4 waiting for approval
+        let waitingHseManagerCount = 0;
+        const waitingHseManagerByGroup = initGroupBreakdown();
+        
+        if (hasApprovalAuth) {
+            try {
+                const step4Requests = await PermohonanPemusnahanLimbah.findAll({
+                    where: {
+                        status: 'InProgress'
+                    },
+                    include: [
+                        {
+                            model: ApprovalWorkflowStep,
+                            as: 'CurrentStep',
+                            required: true,
+                            where: { step_level: 4 }
+                        },
+                        {
+                            model: GolonganLimbah,
+                            required: false
+                        }
+                    ]
+                });
+
+                waitingHseManagerCount = step4Requests.length;
+
+                // Group by golongan
+                for (const request of step4Requests) {
+                    const golonganName = request.GolonganLimbah?.nama;
+                    const group = determineGroupFromGolongan(golonganName);
+                    if (group && waitingHseManagerByGroup.hasOwnProperty(group)) {
+                        waitingHseManagerByGroup[group]++;
+                    }
+                }
+            } catch (step4Error) {
+                console.error('[getDashboardStats] Error checking step 4 requests:', step4Error.message);
+            }
+        }
+
+        // 5. Count "Verifikasi Lapangan" - requests at step 3 waiting for approval
+        let verifikasiLapanganCount = 0;
+        const verifikasiLapanganByGroup = initGroupBreakdown();
+        
+        if (hasApprovalAuth) {
+            try {
+                const step3Requests = await PermohonanPemusnahanLimbah.findAll({
+                    where: {
+                        status: 'InProgress'
+                    },
+                    include: [
+                        {
+                            model: ApprovalWorkflowStep,
+                            as: 'CurrentStep',
+                            required: true,
+                            where: { step_level: 3 }
+                        },
+                        {
+                            model: GolonganLimbah,
+                            required: false
+                        }
+                    ]
+                });
+
+                verifikasiLapanganCount = step3Requests.length;
+
+                // Group by golongan
+                for (const request of step3Requests) {
+                    const golonganName = request.GolonganLimbah?.nama;
+                    const group = determineGroupFromGolongan(golonganName);
+                    if (group && verifikasiLapanganByGroup.hasOwnProperty(group)) {
+                        verifikasiLapanganByGroup[group]++;
+                    }
+                }
+            } catch (step3Error) {
+                console.error('[getDashboardStats] Error checking step 3 requests:', step3Error.message);
+            }
+        }
+
+        // 6. Count "Rejected (KL)" - requests with status Rejected
+        let rejectedKLCount = 0;
+        const rejectedKLByGroup = initGroupBreakdown();
+        
+        try {
+            const rejectedRequests = await PermohonanPemusnahanLimbah.findAll({
+                where: {
+                    status: 'Rejected'
+                },
+                include: [
+                    {
+                        model: GolonganLimbah,
+                        required: false
+                    }
+                ]
+            });
+
+            rejectedKLCount = rejectedRequests.length;
+
+            // Group by golongan
+            for (const request of rejectedRequests) {
+                const golonganName = request.GolonganLimbah?.nama;
+                const group = determineGroupFromGolongan(golonganName);
+                if (group && rejectedKLByGroup.hasOwnProperty(group)) {
+                    rejectedKLByGroup[group]++;
+                }
+            }
+        } catch (rejectedError) {
+            console.error('[getDashboardStats] Error checking rejected requests:', rejectedError.message);
+        }
+
         // Return enhanced stats with group breakdowns
         return res.json({
             success: true,
@@ -209,6 +318,13 @@ exports.getDashboardStats = async (req, res) => {
                     total: approvedCount,
                     byGroup: approvedByGroup
                 },
+                // KL-specific stats
+                waitingHseManager: waitingHseManagerCount,
+                waitingHseManagerByGroup: waitingHseManagerByGroup,
+                verifikasiLapangan: verifikasiLapanganCount,
+                verifikasiLapanganByGroup: verifikasiLapanganByGroup,
+                rejectedKL: rejectedKLCount,
+                rejectedKLByGroup: rejectedKLByGroup,
                 // Legacy fields for backward compatibility
                 myRequestsCount,
                 pendingApprovalsCount,

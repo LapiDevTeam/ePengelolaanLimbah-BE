@@ -492,9 +492,9 @@ const getAllPermohonan = async (req, res) => {
         queryOptions.where = inProgressConditions;
       }
       
-      // Remove existing CurrentStep includes to avoid conflicts
+      // Remove existing CurrentStep and GolonganLimbah includes to avoid conflicts
       queryOptions.include = queryOptions.include.filter(include => 
-        !(include.as === 'CurrentStep')
+        !(include.as === 'CurrentStep') && !(include.model === GolonganLimbah)
       );
       
       // Add required includes for authorization service
