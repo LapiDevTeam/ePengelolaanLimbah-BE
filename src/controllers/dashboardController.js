@@ -38,13 +38,16 @@ exports.getDashboardStats = async (req, res) => {
             'recall-precursor': 0
         });
 
-        // 1. Count "My Requests" - all requests created by this user (with group breakdown)
+        // 1. Count "My Requests" - all requests created by this user (excluding Completed) with group breakdown
         let myRequestsCount = 0;
         const myRequestsByGroup = initGroupBreakdown();
         
         try {
             const myRequests = await PermohonanPemusnahanLimbah.findAll({
-                where: { requester_id: userId },
+                where: { 
+                    requester_id: userId,
+                    status: { [Op.ne]: 'Completed' } // Exclude completed requests
+                },
                 include: [{
                     model: GolonganLimbah,
                     required: false

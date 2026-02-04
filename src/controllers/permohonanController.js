@@ -14,7 +14,7 @@ const {
 
 const { determineApprovalWorkflow } = require('./workflowController');
 const { generateNomorPermohonan } = require('../utils/nomorPermohonanGenerator');
-const { getGolonganNamesByGroup } = require('../utils/golonganGroupMapping');
+const { getGolonganNamesByGroup, determineGroupFromGolongan } = require('../utils/golonganGroupMapping');
 const { 
     checkUserCanApproveRequest, 
     hasUserProcessedCurrentStep 
@@ -284,7 +284,7 @@ const createPermohonan = async (req, res) => {
  */
 const getAllPermohonan = async (req, res) => {
   try {
-    const { page = 1, limit = 8, search = '', column = '', userOnly = false, pendingApproval = false, processedBy = false, status, verificationOnly = false, statusFilter = '', group = '' } = req.query;
+    const { page = 1, limit = 8, search = '', column = '', userOnly = false, pendingApproval = false, processedBy = false, status, verificationOnly = false, statusFilter = '', group = '', excludeCompleted = false } = req.query;
     const { user, delegatedUser } = req;
     // For data filtering: use the actual logged-in user, not the delegated user
     // For actions: use delegatedUser if available (handled in other operations)
@@ -406,16 +406,27 @@ const getAllPermohonan = async (req, res) => {
     // Filter by user's own requests if userOnly is specified
     if (userOnly === 'true' || userOnly === true) {
       // Merge with existing whereClause if it exists (from search filters)
+      const userConditions = [{ requester_id: filteringUser.log_NIK }];
+      
+      // Exclude completed requests if excludeCompleted is specified (for My Requests tab)
+      if (excludeCompleted === 'true' || excludeCompleted === true) {
+        userConditions.push({ status: { [Op.ne]: 'Completed' } });
+      }
+      
       if (Object.keys(queryOptions.where).length > 0) {
         // Combine with existing conditions using Op.and
         queryOptions.where = {
           [Op.and]: [
             queryOptions.where,
-            { requester_id: filteringUser.log_NIK }
+            ...userConditions
           ]
         };
       } else {
-        queryOptions.where.requester_id = filteringUser.log_NIK;
+        if (userConditions.length === 1) {
+          queryOptions.where.requester_id = filteringUser.log_NIK;
+        } else {
+          queryOptions.where = { [Op.and]: userConditions };
+        }
       }
     }
 
@@ -492,9 +503,9 @@ const getAllPermohonan = async (req, res) => {
         queryOptions.where = inProgressConditions;
       }
       
-      // Remove existing CurrentStep and GolonganLimbah includes to avoid conflicts
+      // Remove existing CurrentStep include to avoid conflicts, but KEEP GolonganLimbah for group filtering
       queryOptions.include = queryOptions.include.filter(include => 
-        !(include.as === 'CurrentStep') && !(include.model === GolonganLimbah)
+        !(include.as === 'CurrentStep')
       );
       
       // Add required includes for authorization service
@@ -505,14 +516,19 @@ const getAllPermohonan = async (req, res) => {
           required: true
         },
         {
-          model: GolonganLimbah,
-          required: false
-        },
-        {
           model: ApprovalHistory,
           required: false
         }
       );
+      
+      // Ensure GolonganLimbah is included (needed for group filtering and authorization)
+      if (!queryOptions.include.some(inc => inc.model === GolonganLimbah)) {
+        queryOptions.include.push({
+          model: GolonganLimbah,
+          // Use required: true only when group filtering is active, otherwise false for broader results
+          required: !!group
+        });
+      }
       
       // Mark that we need post-processing
       const needsAuthorizationFilter = true;
@@ -528,9 +544,11 @@ const getAllPermohonan = async (req, res) => {
       // So we fetch all and filter in memory
     }
 
-    // For processedBy or post-query filters, we need to remove pagination from query and do it after filtering
+    // For pendingApproval, processedBy, or post-query filters, we need to remove pagination from query and do it after filtering
     // because the filtering logic requires post-processing
-    const needsPostProcessing = (processedBy === 'true' || processedBy === true) || needsPostQueryFilter;
+    const needsPostProcessing = (pendingApproval === 'true' || pendingApproval === true) || 
+                                 (processedBy === 'true' || processedBy === true) || 
+                                 needsPostQueryFilter;
     let queryOptionsForDB = { ...queryOptions };
     
     if (needsPostProcessing) {
@@ -620,9 +638,55 @@ const getAllPermohonan = async (req, res) => {
     
     const totalPages = Math.ceil(filteredCount / parseInt(limit));
     
-    // Transform response: keep only required fields from DetailLimbahs
+    // Pre-compute pending status for all requests in parallel for better performance
+    const pendingStatusPromises = filteredList.map(async (request) => {
+      const requestData = request.toJSON ? request.toJSON() : request;
+      
+      // Only check pending status for InProgress requests with a current step
+      if (requestData.status !== 'InProgress' || !requestData.current_step_id) {
+        return { requestId: requestData.request_id, isPending: false, canApprove: false };
+      }
+      
+      // Check if user can approve this request
+      const canApprove = await checkUserCanApproveRequest(filteringUser.log_NIK, request);
+      
+      // Check if user has already processed this step
+      const hasProcessed = hasUserProcessedCurrentStep(request, filteringUser.log_NIK);
+      
+      return {
+        requestId: requestData.request_id,
+        isPending: canApprove && !hasProcessed,
+        canApprove: canApprove
+      };
+    });
+    
+    const pendingStatuses = await Promise.all(pendingStatusPromises);
+    const pendingStatusMap = new Map(
+      pendingStatuses.map(ps => [ps.requestId, { isPending: ps.isPending, canApprove: ps.canApprove }])
+    );
+    
+    // Transform response: add golongan group and pending status
     const transformedList = filteredList.map(item => {
       const itemData = item.toJSON ? item.toJSON() : item;
+      
+      // Add golongan group
+      const golonganName = itemData.GolonganLimbah?.nama || null;
+      itemData.golonganGroup = determineGroupFromGolongan(golonganName);
+      
+      // Add pending approval status for current user
+      const pendingStatus = pendingStatusMap.get(itemData.request_id) || { isPending: false, canApprove: false };
+      itemData.isPendingForCurrentUser = pendingStatus.isPending;
+      itemData.canCurrentUserApprove = pendingStatus.canApprove;
+      
+      // Add step info for easier FE rendering
+      itemData.currentStepInfo = {
+        stepId: itemData.CurrentStep?.step_id || null,
+        stepLevel: itemData.CurrentStep?.step_level || null,
+        stepName: itemData.CurrentStep?.step_name || null,
+        requiredApprovals: itemData.CurrentStep?.required_approvals || 1
+      };
+      
+      // Transform DetailLimbahs - keep only required fields
       if (itemData.DetailLimbahs && Array.isArray(itemData.DetailLimbahs)) {
         itemData.DetailLimbahs = itemData.DetailLimbahs.map(detail => ({
           nama_limbah: detail.nama_limbah,
