@@ -12,6 +12,7 @@ const {
     SigningWorkflowStep
 } = require('../models');
 const jakartaTime = require('../utils/jakartaTime');
+const { getGolonganNamesByGroup, GOLONGAN_GROUP_MAP } = require('../utils/golonganGroupMapping');
 
 /**
  * Helper function to fetch Inisial_Name from external API
@@ -1094,14 +1095,18 @@ const generateLogbookExcel = async (req, res) => {
 };
 
 /**
- * NEW FUNCTION
- * GET /api/document-generation/permohonan/range/excel?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+ * GET /api/document-generation/permohonan/range/excel?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD&golongan_groups=limbah-b3,recall
  * Generates an Excel file with details of all permohonan within a date range (tanggal_pengajuan).
- * Filter by bagian: KL users can download all, others can only download their own bagian.
+ * 
+ * Filter by golongan and bagian based on user department:
+ * - KL: All bagian for all golongan groups
+ * - QA: All bagian for 'recall', own bagian for 'limbah-b3' and 'recall-precursor'
+ * - PN1: All bagian for 'recall-precursor', own bagian for 'limbah-b3' and 'recall'
+ * - Others: Own bagian for all golongan groups
  */
 const downloadPermohonanByDateRangeExcel = async (req, res) => {
     try {
-        const { start_date, end_date } = req.query;
+        const { start_date, end_date, golongan_groups } = req.query;
 
         if (!start_date || !end_date) {
             return res.status(400).json({ 
@@ -1111,12 +1116,28 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
 
         // Get user info from auth middleware
         const userBagian = req.user?.emp_DeptID;
+        const normalizedUserBagian = userBagian ? String(userBagian).toUpperCase() : null;
         
         if (!userBagian) {
             return res.status(401).json({ 
                 message: 'User bagian information not found' 
             });
         }
+
+        // Parse golongan_groups parameter - default to all groups if not provided
+        const validGroups = ['limbah-b3', 'recall', 'recall-precursor'];
+        let selectedGroups = validGroups; // default: all groups
+        
+        if (golongan_groups && golongan_groups !== 'all') {
+            selectedGroups = golongan_groups.split(',').map(g => g.trim()).filter(g => validGroups.includes(g));
+            if (selectedGroups.length === 0) {
+                return res.status(400).json({ 
+                    message: 'Invalid golongan_groups parameter. Valid values: limbah-b3, recall, recall-precursor' 
+                });
+            }
+        }
+
+        console.log(`🔍 Download Lampiran - User: ${userBagian}, Selected Groups: ${selectedGroups.join(', ')}`);
 
         // Parse dates and set time boundaries
         const startDate = new Date(start_date);
@@ -1158,38 +1179,81 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
             return hasRole1 && hasRole2 && hasRole3 && hasRole4;
         };
 
-        // --- Build where clause based on user bagian ---
+        // --- Helper function to determine if user can access all bagian for a specific group ---
+        const canAccessAllBagianForGroup = (dept, group) => {
+            const deptUpper = dept ? String(dept).toUpperCase() : null;
+            
+            // KL can access all bagian for all groups
+            if (deptUpper === 'KL') return true;
+            
+            // QA can access all bagian for 'recall' only
+            if (deptUpper === 'QA' && group === 'recall') return true;
+            
+            // PN1 can access all bagian for 'recall-precursor' only
+            if (deptUpper === 'PN1' && group === 'recall-precursor') return true;
+            
+            // Others: own bagian only
+            return false;
+        };
+
+        // --- Build golongan names list from selected groups ---
+        const allSelectedGolonganNames = [];
+        for (const group of selectedGroups) {
+            const golonganNames = getGolonganNamesByGroup(group);
+            if (golonganNames) {
+                allSelectedGolonganNames.push(...golonganNames);
+            }
+        }
+
+        // --- Build where clause ---
+        const Op = require('sequelize').Op;
         const whereClause = {
             created_at: {
-                [require('sequelize').Op.between]: [startDate, endDate]
+                [Op.between]: [startDate, endDate]
             }
         };
-        
-        // If user bagian is not 'KL', filter by user's bagian
-        if (userBagian !== 'KL') {
-            whereClause.bagian = userBagian;
-        }
-        // If user bagian is 'KL', no bagian filter - download all
 
-        // --- Get permohonan data filtered by tanggal_pengajuan range and bagian ---
+        // Add golongan filter
+        if (allSelectedGolonganNames.length > 0) {
+            whereClause['$GolonganLimbah.nama$'] = { [Op.in]: allSelectedGolonganNames };
+        }
+
+        // --- Get permohonan data ---
         const permohonanList = await PermohonanPemusnahanLimbah.findAll({
             where: whereClause,
             include: [
                 { model: DetailLimbah },
-                { model: GolonganLimbah },
+                { model: GolonganLimbah, required: true },
                 { model: JenisLimbahB3 },
                 { 
                     model: ApprovalHistory,
                     include: [{ model: ApprovalWorkflowStep }],
-                    // required: false
                 }
             ],
             order: [['created_at', 'DESC']]
         });
-        console.log("🚀 ~ Total permohonan found:", permohonanList.length)
+        console.log("🚀 ~ Total permohonan found (before scope filter):", permohonanList.length);
+
+        // --- Apply scope-based filtering ---
+        // This filters based on user's access to bagian for each golongan group
+        const scopeFilteredList = permohonanList.filter(permohonan => {
+            const golonganName = permohonan.GolonganLimbah?.nama;
+            const golonganGroup = determineGroupFromGolonganName(golonganName);
+            const permohonanBagian = permohonan.bagian ? String(permohonan.bagian).toUpperCase() : null;
+            
+            // Check if user can access all bagian for this group
+            if (canAccessAllBagianForGroup(userBagian, golonganGroup)) {
+                return true; // User can see all bagian for this group
+            }
+            
+            // User can only see their own bagian for this group
+            return permohonanBagian === normalizedUserBagian;
+        });
+
+        console.log("🚀 ~ After scope filter:", scopeFilteredList.length);
 
         // --- Filter permohonan: Completed, Rejected, or InProgress with verification completed ---
-        const filteredPermohonanList = permohonanList.filter(permohonan => {
+        const filteredPermohonanList = scopeFilteredList.filter(permohonan => {
             const status = permohonan.status;
             const passedVerification = hasPassedVerification(permohonan);
             
@@ -1227,9 +1291,46 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
 
         console.log(`\n✅ Filtered permohonan count: ${filteredPermohonanList.length}`);
 
+        // --- Helper function to determine group from golongan name ---
+        function determineGroupFromGolonganName(golonganName) {
+            if (!golonganName) return 'limbah-b3'; // default
+            
+            const lowerName = String(golonganName).toLowerCase();
+            
+            // Check each group's golongan names
+            for (const [group, golonganList] of Object.entries(GOLONGAN_GROUP_MAP)) {
+                if (golonganList.some(g => String(g).toLowerCase() === lowerName)) {
+                    return group;
+                }
+            }
+            
+            // Fallback pattern matching
+            if (lowerName.includes('recall') && lowerName.includes('prekursor')) {
+                return 'recall-precursor';
+            }
+            if (lowerName.includes('prekursor') || lowerName.includes('oot')) {
+                return 'recall-precursor';
+            }
+            if (lowerName.includes('recall')) {
+                return 'recall';
+            }
+            
+            return 'limbah-b3'; // default
+        }
+
         if (!filteredPermohonanList || filteredPermohonanList.length === 0) {
             return res.status(404).json({ 
-                message: 'No permohonan found matching the criteria (Completed, Rejected, or InProgress with verification completed)' 
+                success: false,
+                message: 'Tidak ada data permohonan yang ditemukan',
+                details: {
+                    totalFound: permohonanList.length,
+                    afterScopeFilter: scopeFilteredList.length,
+                    afterStatusFilter: filteredPermohonanList.length,
+                    criteria: 'Data harus berstatus: Completed, Rejected, atau InProgress dengan verifikasi completed',
+                    dateRange: `${start_date} s/d ${end_date}`,
+                    selectedGroups: selectedGroups.join(', '),
+                    userDept: userBagian
+                }
             });
         }
 
