@@ -284,8 +284,26 @@ const createPermohonan = async (req, res) => {
  */
 const getAllPermohonan = async (req, res) => {
   try {
-    const { page = 1, limit = 8, search = '', column = '', userOnly = false, pendingApproval = false, processedBy = false, status, verificationOnly = false, statusFilter = '', group = '', excludeCompleted = false } = req.query;
+    const { 
+      page = 1, 
+      limit = 8, 
+      search = '', 
+      column = '', 
+      userOnly = false, 
+      pendingApproval = false, 
+      processedBy = false, 
+      status, 
+      verificationOnly = false, 
+      statusFilter = '', 
+      group = '', 
+      excludeCompleted = false,
+      // New params for all-permohonan tab (non-KL users)
+      filterByBagian = false,
+      userBagian = '',
+      additionalGroups = ''
+    } = req.query;
     const { user, delegatedUser } = req;
+    console.log("🚀 ~ getAllPermohonan ~ user:", user)
     // For data filtering: use the actual logged-in user, not the delegated user
     // For actions: use delegatedUser if available (handled in other operations)
     const filteringUser = user; // Always use the logged-in user for filtering
@@ -340,21 +358,63 @@ const getAllPermohonan = async (req, res) => {
       whereClause.status = status;
     }
 
-    // Handle statusFilter for KL dashboard cards
+    // Handle statusFilter for dashboard cards
     // This maps dashboard card filters to appropriate query conditions
+    // Can be a single status or comma-separated list (e.g., "Verification,Pembuatan BAP")
     let statusFilterStepLevel = null;
     if (statusFilter) {
-      if (statusFilter === 'Verification') {
-        // Show InProgress requests at verification step (step 3)
-        whereClause.status = 'InProgress';
-        statusFilterStepLevel = 3;
-      } else if (statusFilter === 'WaitingHSEManager') {
-        // Show InProgress requests at HSE Manager step (step 4)
-        whereClause.status = 'InProgress';
-        statusFilterStepLevel = 4;
-      } else if (statusFilter === 'Rejected') {
-        // Show all rejected requests
-        whereClause.status = 'Rejected';
+      const statusFilters = statusFilter.split(',').map(s => s.trim());
+      
+      if (statusFilters.length === 1) {
+        // Single status filter
+        if (statusFilter === 'Verification') {
+          // Show InProgress requests at verification step (step 3)
+          whereClause.status = 'InProgress';
+          statusFilterStepLevel = 3;
+        } else if (statusFilter === 'WaitingHSEManager') {
+          // Show InProgress requests at HSE Manager step (step 4)
+          whereClause.status = 'InProgress';
+          statusFilterStepLevel = 4;
+        } else if (statusFilter === 'Rejected') {
+          // Show all rejected requests
+          whereClause.status = 'Rejected';
+        } else if (statusFilter === 'Pembuatan BAP') {
+          // Show Pembuatan BAP requests
+          whereClause.status = 'Pembuatan BAP';
+        }
+      } else {
+        // Multiple status filters (e.g., ["Verification", "Pembuatan BAP"])
+        const statusConditions = [];
+        
+        for (const sf of statusFilters) {
+          if (sf === 'Verification') {
+            // InProgress at step 3 will be handled separately with step filtering
+            statusConditions.push({ status: 'InProgress' });
+          } else if (sf === 'Pembuatan BAP') {
+            statusConditions.push({ status: 'Pembuatan BAP' });
+          } else if (sf === 'Rejected') {
+            statusConditions.push({ status: 'Rejected' });
+          }
+        }
+        
+        if (statusConditions.length > 0) {
+          // For mixed filters, we need to handle this differently
+          // If includes Verification, we need step_level = 3 for InProgress
+          const hasVerification = statusFilters.includes('Verification');
+          const hasPembuatanBAP = statusFilters.includes('Pembuatan BAP');
+          
+          if (hasVerification && hasPembuatanBAP) {
+            // Show InProgress at step 3 OR Pembuatan BAP
+            whereClause[Op.or] = [
+              { status: 'Pembuatan BAP' },
+              { status: 'InProgress' } // Will filter to step 3 below
+            ];
+            // Mark that we need to filter InProgress to step 3
+            statusFilterStepLevel = 3;
+          } else if (statusConditions.length > 1) {
+            whereClause[Op.or] = statusConditions;
+          }
+        }
       }
     }
 
@@ -393,14 +453,90 @@ const getAllPermohonan = async (req, res) => {
 
     // Apply statusFilter step level filtering (for KL dashboard cards)
     if (statusFilterStepLevel) {
-      queryOptions.include = queryOptions.include.filter(include => include.as !== 'CurrentStep');
-      queryOptions.include.push({
-        model: ApprovalWorkflowStep,
-        as: 'CurrentStep',
-        required: true,
-        where: { step_level: statusFilterStepLevel },
-        include: [ApprovalWorkflowApprover]
-      });
+      // Check if we have multiple statuses (OR condition)
+      const hasMultipleStatuses = whereClause[Op.or] && Array.isArray(whereClause[Op.or]);
+      
+      if (hasMultipleStatuses) {
+        // For multiple statuses (e.g., Verification OR Pembuatan BAP)
+        // We need required: false and filter in post-processing
+        // Because Pembuatan BAP won't have CurrentStep at level 3
+        queryOptions.include = queryOptions.include.filter(include => include.as !== 'CurrentStep');
+        queryOptions.include.push({
+          model: ApprovalWorkflowStep,
+          as: 'CurrentStep',
+          required: false,
+          include: [ApprovalWorkflowApprover]
+        });
+      } else {
+        // Single status filter - require step level
+        queryOptions.include = queryOptions.include.filter(include => include.as !== 'CurrentStep');
+        queryOptions.include.push({
+          model: ApprovalWorkflowStep,
+          as: 'CurrentStep',
+          required: true,
+          where: { step_level: statusFilterStepLevel },
+          include: [ApprovalWorkflowApprover]
+        });
+      }
+    }
+
+    // Filter by bagian for non-KL users in all-permohonan tab
+    // This supports QA/PN1 users who can see their bagian + additional golongan groups
+    if ((filterByBagian === 'true' || filterByBagian === true) && userBagian) {
+      // Normalize userBagian for case-insensitive comparison
+      const normalizedUserBagian = String(userBagian).toUpperCase();
+      
+      // Use Sequelize.fn for case-insensitive bagian comparison
+      const bagianConditions = [
+        Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), normalizedUserBagian)
+      ];
+      
+      // Add additional golongan groups (for QA: recall, for PN1: recall-precursor)
+      if (additionalGroups) {
+        const additionalGroupList = additionalGroups.split(',').map(g => g.trim());
+        const additionalGolonganNames = [];
+        
+        for (const grp of additionalGroupList) {
+          const golonganNames = getGolonganNamesByGroup(grp);
+          if (golonganNames) {
+            additionalGolonganNames.push(...golonganNames);
+          }
+        }
+        
+        if (additionalGolonganNames.length > 0) {
+          // User can see: their bagian OR requests with additional golongan
+          bagianConditions.push({
+            '$GolonganLimbah.nama$': { [Op.in]: additionalGolonganNames }
+          });
+        }
+      }
+      
+      // Apply bagian filter (OR with additional groups if any)
+      if (bagianConditions.length > 1) {
+        // Combine with existing where using AND
+        if (Object.keys(queryOptions.where).length > 0) {
+          queryOptions.where = {
+            [Op.and]: [
+              queryOptions.where,
+              { [Op.or]: bagianConditions }
+            ]
+          };
+        } else {
+          queryOptions.where = { [Op.or]: bagianConditions };
+        }
+      } else {
+        // Only bagian filter (no additional groups)
+        if (Object.keys(queryOptions.where).length > 0) {
+          queryOptions.where = {
+            [Op.and]: [
+              queryOptions.where,
+              bagianConditions[0]
+            ]
+          };
+        } else {
+          queryOptions.where = bagianConditions[0];
+        }
+      }
     }
     
     // Filter by user's own requests if userOnly is specified
@@ -543,12 +679,19 @@ const getAllPermohonan = async (req, res) => {
       // The subquery approach doesn't work well with current_step_id filtering
       // So we fetch all and filter in memory
     }
+    
+    // Check if we need to filter InProgress to step 3 only (for Verification status filter)
+    // This is needed when statusFilter includes both 'Verification' and 'Pembuatan BAP'
+    const needsVerificationStepFilter = statusFilterStepLevel === 3 && 
+      whereClause[Op.or] && 
+      Array.isArray(whereClause[Op.or]);
 
-    // For pendingApproval, processedBy, or post-query filters, we need to remove pagination from query and do it after filtering
+    // For pendingApproval, processedBy, post-query filters, or verification step filter, we need to remove pagination from query and do it after filtering
     // because the filtering logic requires post-processing
     const needsPostProcessing = (pendingApproval === 'true' || pendingApproval === true) || 
                                  (processedBy === 'true' || processedBy === true) || 
-                                 needsPostQueryFilter;
+                                 needsPostQueryFilter ||
+                                 needsVerificationStepFilter;
     let queryOptionsForDB = { ...queryOptions };
     
     if (needsPostProcessing) {
@@ -591,6 +734,31 @@ const getAllPermohonan = async (req, res) => {
           return details.some(d => String(d.bobot || '').includes(search));
         }
         return true;
+      });
+      
+      filteredCount = filteredList.length;
+    }
+    
+    // Post-processing filter: For Verification + Pembuatan BAP combined filter,
+    // ensure InProgress requests are only at step level 3 (Verification step)
+    // This is because the SQL query uses OR for statuses and can't filter step_level for only one status
+    if (needsVerificationStepFilter) {
+      filteredList = filteredList.filter(request => {
+        const itemData = request.toJSON ? request.toJSON() : request;
+        
+        // Pembuatan BAP status - always include
+        if (itemData.status === 'Pembuatan BAP') {
+          return true;
+        }
+        
+        // InProgress status - only include if at step level 3 (Verification)
+        if (itemData.status === 'InProgress') {
+          const stepLevel = itemData.CurrentStep?.step_level || null;
+          return stepLevel === 3;
+        }
+        
+        // Other statuses - exclude (shouldn't happen with proper filtering)
+        return false;
       });
       
       filteredCount = filteredList.length;

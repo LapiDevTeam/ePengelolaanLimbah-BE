@@ -12,6 +12,59 @@ const {
 } = require('../services/approvalAuthorizationService');
 const { determineGroupFromGolongan } = require('../utils/golonganGroupMapping');
 
+// Department and scope constants (mirrored from FE accessRights.js)
+const KL_DEPARTMENT_ID = 'KL';
+const QA_DEPARTMENT_ID = 'QA';
+const PN1_DEPARTMENT_ID = 'PN1';
+const DAFTAR_AJUAN_APPROVAL_ROLES = ['Manager', 'HSE', 'APJ'];
+const SPECIAL_USER_IDS = { PJKPO: 'PJKPO' };
+
+// GOLONGAN GROUPS
+const GOLONGAN_GROUPS = {
+    LIMBAH_B3: 'limbah-b3',
+    RECALL: 'recall',
+    RECALL_PRECURSOR: 'recall-precursor'
+};
+
+/**
+ * Check if user has approval authority
+ */
+const hasApprovalAuthorityLocal = (user) => {
+    if (!user) return false;
+    if (user.log_NIK === SPECIAL_USER_IDS.PJKPO) return true;
+    if (user.role && DAFTAR_AJUAN_APPROVAL_ROLES.includes(user.role)) return true;
+    return false;
+};
+
+/**
+ * Get user scope for verifikasi lapangan / pembuatan BAP
+ * Returns: { scope: 'all'|'bagian_plus_group'|'own', filterByBagian: boolean, additionalGroups: string[] }
+ * NOTE: Only KL users see all data. Approvers don't see these cards (they have Pending Approval)
+ */
+const getUserDataScope = (user) => {
+    if (!user) return { scope: 'none', filterByBagian: false, additionalGroups: [] };
+    
+    const deptId = user.emp_DeptID ? String(user.emp_DeptID).toUpperCase() : null;
+    
+    // KL users can see all data (only KL, not approvers)
+    if (deptId === KL_DEPARTMENT_ID) {
+        return { scope: 'all', filterByBagian: false, additionalGroups: [] };
+    }
+    
+    // QA users can see their own bagian data + all 'recall' group data
+    if (deptId === QA_DEPARTMENT_ID) {
+        return { scope: 'bagian_plus_group', filterByBagian: true, additionalGroups: [GOLONGAN_GROUPS.RECALL] };
+    }
+    
+    // PN1 users can see their own bagian data + all 'recall-precursor' group data
+    if (deptId === PN1_DEPARTMENT_ID) {
+        return { scope: 'bagian_plus_group', filterByBagian: true, additionalGroups: [GOLONGAN_GROUPS.RECALL_PRECURSOR] };
+    }
+    
+    // Regular users can only see data from their own department (bagian)
+    return { scope: 'own', filterByBagian: true, additionalGroups: [] };
+};
+
 /**
  * Get dashboard statistics for the current user
  * Returns counts for:
@@ -23,6 +76,7 @@ exports.getDashboardStats = async (req, res) => {
     try {
         const userId = req.user?.log_NIK;
         const userJobLevel = req.user?.emp_JobLevelID || req.user?.Job_LevelID;
+        const userBagian = req.user?.emp_DeptID;
 
         if (!userId) {
             return res.status(401).json({
@@ -30,6 +84,9 @@ exports.getDashboardStats = async (req, res) => {
                 message: 'User not authenticated'
             });
         }
+
+        // Get user's data scope
+        const userScope = getUserDataScope(req.user);
 
         // Initialize group breakdowns
         const initGroupBreakdown = () => ({
@@ -235,46 +292,145 @@ exports.getDashboardStats = async (req, res) => {
             }
         }
 
-        // 5. Count "Verifikasi Lapangan" - requests at step 3 waiting for approval
+        // 5. Count "Verifikasi Lapangan" - requests at step 3 waiting for approval (available for all users)
         let verifikasiLapanganCount = 0;
         const verifikasiLapanganByGroup = initGroupBreakdown();
         
-        if (hasApprovalAuth) {
-            try {
-                const step3Requests = await PermohonanPemusnahanLimbah.findAll({
-                    where: {
-                        status: 'InProgress'
+        // Verifikasi Lapangan is available for all users with different scopes based on department
+        // Normalize userBagian for comparison (convert to uppercase string)
+        const normalizedUserBagian = userBagian ? String(userBagian).toUpperCase() : null;
+        
+        try {
+            const step3Requests = await PermohonanPemusnahanLimbah.findAll({
+                where: {
+                    status: 'InProgress'
+                },
+                include: [
+                    {
+                        model: ApprovalWorkflowStep,
+                        as: 'CurrentStep',
+                        required: true,
+                        where: { step_level: 3 }
                     },
-                    include: [
-                        {
-                            model: ApprovalWorkflowStep,
-                            as: 'CurrentStep',
-                            required: true,
-                            where: { step_level: 3 }
-                        },
-                        {
-                            model: GolonganLimbah,
-                            required: false
-                        }
-                    ]
-                });
-
-                verifikasiLapanganCount = step3Requests.length;
-
-                // Group by golongan
-                for (const request of step3Requests) {
-                    const golonganName = request.GolonganLimbah?.nama;
-                    const group = determineGroupFromGolongan(golonganName);
-                    if (group && verifikasiLapanganByGroup.hasOwnProperty(group)) {
-                        verifikasiLapanganByGroup[group]++;
+                    {
+                        model: GolonganLimbah,
+                        required: false
                     }
+                ]
+            });
+
+            // Filter based on user scope
+            const filteredStep3Requests = step3Requests.filter(request => {
+                const golonganName = request.GolonganLimbah?.nama;
+                const group = determineGroupFromGolongan(golonganName);
+                // Normalize request bagian for comparison
+                const normalizedRequestBagian = request.bagian ? String(request.bagian).toUpperCase() : null;
+                
+                // scope 'all' - no filtering needed
+                if (userScope.scope === 'all') {
+                    return true;
                 }
-            } catch (step3Error) {
-                console.error('[getDashboardStats] Error checking step 3 requests:', step3Error.message);
+                
+                // scope 'bagian_plus_group' - user can see their bagian OR additional groups
+                if (userScope.scope === 'bagian_plus_group') {
+                    // Check if request is from user's bagian
+                    if (normalizedRequestBagian === normalizedUserBagian) {
+                        return true;
+                    }
+                    // Check if request is in user's additional groups
+                    if (userScope.additionalGroups.includes(group)) {
+                        return true;
+                    }
+                    return false;
+                }
+                
+                // scope 'own' - only user's bagian
+                if (userScope.scope === 'own') {
+                    return normalizedRequestBagian === normalizedUserBagian;
+                }
+                
+                return false;
+            });
+
+            verifikasiLapanganCount = filteredStep3Requests.length;
+
+            // Group by golongan
+            for (const request of filteredStep3Requests) {
+                const golonganName = request.GolonganLimbah?.nama;
+                const group = determineGroupFromGolongan(golonganName);
+                if (group && verifikasiLapanganByGroup.hasOwnProperty(group)) {
+                    verifikasiLapanganByGroup[group]++;
+                }
             }
+        } catch (step3Error) {
+            console.error('[getDashboardStats] Error checking step 3 requests:', step3Error.message);
         }
 
-        // 6. Count "Rejected (KL)" - requests with status Rejected
+        // 6. Count "Pembuatan BAP" - requests with status 'Pembuatan BAP' (available for all users)
+        let pembuatanBAPCount = 0;
+        const pembuatanBAPByGroup = initGroupBreakdown();
+        
+        try {
+            const bapRequests = await PermohonanPemusnahanLimbah.findAll({
+                where: {
+                    status: 'Pembuatan BAP'
+                },
+                include: [
+                    {
+                        model: GolonganLimbah,
+                        required: false
+                    }
+                ]
+            });
+
+            // Filter based on user scope (using normalizedUserBagian from verifikasi section)
+            const filteredBapRequests = bapRequests.filter(request => {
+                const golonganName = request.GolonganLimbah?.nama;
+                const group = determineGroupFromGolongan(golonganName);
+                // Normalize request bagian for comparison
+                const normalizedRequestBagian = request.bagian ? String(request.bagian).toUpperCase() : null;
+                
+                // scope 'all' - no filtering needed
+                if (userScope.scope === 'all') {
+                    return true;
+                }
+                
+                // scope 'bagian_plus_group' - user can see their bagian OR additional groups
+                if (userScope.scope === 'bagian_plus_group') {
+                    // Check if request is from user's bagian
+                    if (normalizedRequestBagian === normalizedUserBagian) {
+                        return true;
+                    }
+                    // Check if request is in user's additional groups
+                    if (userScope.additionalGroups.includes(group)) {
+                        return true;
+                    }
+                    return false;
+                }
+                
+                // scope 'own' - only user's bagian
+                if (userScope.scope === 'own') {
+                    return normalizedRequestBagian === normalizedUserBagian;
+                }
+                
+                return false;
+            });
+
+            pembuatanBAPCount = filteredBapRequests.length;
+
+            // Group by golongan
+            for (const request of filteredBapRequests) {
+                const golonganName = request.GolonganLimbah?.nama;
+                const group = determineGroupFromGolongan(golonganName);
+                if (group && pembuatanBAPByGroup.hasOwnProperty(group)) {
+                    pembuatanBAPByGroup[group]++;
+                }
+            }
+        } catch (bapError) {
+            console.error('[getDashboardStats] Error checking Pembuatan BAP requests:', bapError.message);
+        }
+
+        // 7. Count "Rejected (KL)" - requests with status Rejected
         let rejectedKLCount = 0;
         const rejectedKLByGroup = initGroupBreakdown();
         
@@ -326,6 +482,8 @@ exports.getDashboardStats = async (req, res) => {
                 waitingHseManagerByGroup: waitingHseManagerByGroup,
                 verifikasiLapangan: verifikasiLapanganCount,
                 verifikasiLapanganByGroup: verifikasiLapanganByGroup,
+                pembuatanBAP: pembuatanBAPCount,
+                pembuatanBAPByGroup: pembuatanBAPByGroup,
                 rejectedKL: rejectedKLCount,
                 rejectedKLByGroup: rejectedKLByGroup,
                 // Legacy fields for backward compatibility
