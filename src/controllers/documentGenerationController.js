@@ -12,7 +12,7 @@ const {
     SigningWorkflowStep
 } = require('../models');
 const jakartaTime = require('../utils/jakartaTime');
-const { getGolonganNamesByGroup, GOLONGAN_GROUP_MAP } = require('../utils/golonganGroupMapping');
+const { getGolonganNamesByGroup, GOLONGAN_GROUP_MAP, determineGroupFromGolongan } = require('../utils/golonganGroupMapping');
 
 /**
  * Helper function to fetch Inisial_Name from external API
@@ -701,13 +701,34 @@ const generatePermohonanExcel = async (req, res) => {
  */
 const generateLogbookExcel = async (req, res) => {
     try {
-        const { start_date, end_date } = req.query;
+        const { start_date, end_date, golongan_group } = req.query;
 
         if (!start_date || !end_date) {
             return res.status(400).json({ 
                 message: 'start_date and end_date query parameters are required (format: YYYY-MM-DD)' 
             });
         }
+
+        // Determine golongan group filter
+        // golongan_group: 'limbah-b3', 'recall', 'recall-precursor', or 'all' (default)
+        const selectedGroup = golongan_group && golongan_group !== 'all' ? golongan_group : null;
+        let golonganNameFilter = null;
+        if (selectedGroup) {
+            golonganNameFilter = getGolonganNamesByGroup(selectedGroup);
+            if (!golonganNameFilter) {
+                return res.status(400).json({
+                    message: `Invalid golongan_group: ${golongan_group}. Valid values: limbah-b3, recall, recall-precursor, all`
+                });
+            }
+        }
+
+        // Group label map for display
+        const GROUP_LABEL_MAP = {
+            'limbah-b3': 'Limbah B3',
+            'recall': 'Recall',
+            'recall-precursor': 'Precursor & OOT'
+        };
+        const groupLabel = selectedGroup ? (GROUP_LABEL_MAP[selectedGroup] || selectedGroup) : 'Semua Golongan';
 
         // Parse dates and set time boundaries
         const startDate = new Date(start_date);
@@ -722,13 +743,16 @@ const generateLogbookExcel = async (req, res) => {
         });
 
         // --- Get permohonan data with status Completed ---
+        const permohonanWhere = { status: 'Completed' };
+        const golonganInclude = golonganNameFilter
+            ? { model: GolonganLimbah, where: { nama: { [require('sequelize').Op.in]: golonganNameFilter } } }
+            : { model: GolonganLimbah };
+
         const allPermohonanData = await PermohonanPemusnahanLimbah.findAll({
-            where: {
-                status: 'Completed'
-            },
+            where: permohonanWhere,
             include: [
                 { model: DetailLimbah },
-                { model: GolonganLimbah },
+                golonganInclude,
                 { model: JenisLimbahB3 },
                 { 
                     model: ApprovalHistory,
@@ -959,7 +983,7 @@ const generateLogbookExcel = async (req, res) => {
         // Add title row for Total sheet
         totalWorksheet.mergeCells('A1:D1'); // Merge cells for title (4 columns total)
         const totalTitleCell = totalWorksheet.getCell('A1');
-        totalTitleCell.value = 'Logbook Total Limbah B3';
+        totalTitleCell.value = `Logbook Total ${groupLabel}`;
         totalTitleCell.style = {
             font: { bold: true, size: 14, color: { argb: 'FF000000' } },
             alignment: { vertical: 'middle', horizontal: 'center' },
@@ -1041,7 +1065,7 @@ const generateLogbookExcel = async (req, res) => {
             // Add title row for empty sheet
             emptyWorksheet.mergeCells('A1:D1');
             const emptyTitleCell = emptyWorksheet.getCell('A1');
-            emptyTitleCell.value = 'Logbook Total Limbah B3';
+            emptyTitleCell.value = `Logbook Total ${groupLabel}`;
             emptyTitleCell.style = {
                 font: { bold: true, size: 14, color: { argb: 'FF000000' } },
                 alignment: { vertical: 'middle', horizontal: 'center' },
@@ -1073,7 +1097,8 @@ const generateLogbookExcel = async (req, res) => {
         // --- Set response headers (exactly like generatePermohonanExcel) ---
         const startDateFormatted = start_date.replace(/-/g, '');
         const endDateFormatted = end_date.replace(/-/g, '');
-        const filename = `logbook-limbah-b3-${startDateFormatted}-${endDateFormatted}.xlsx`;
+        const fileLabel = groupLabel.replace(/[^a-zA-Z0-9&]/g, '_').replace(/_+/g, '_');
+        const filename = `logbook-${fileLabel}-${startDateFormatted}-${endDateFormatted}.xlsx`;
         
         res.setHeader(
             'Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
