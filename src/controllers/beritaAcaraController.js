@@ -161,6 +161,7 @@ const checkSigningAuthorization = async (authorizingUser, beritaAcara) => {
     }
   }
 
+  console.log("🚀 ~ checkSigningAuthorization ~ isAuthorized:", isAuthorized)
   return isAuthorized;
 };
 
@@ -939,8 +940,14 @@ const getAllBeritaAcara = async (req, res) => {
           ],
         },
         { model: SigningWorkflowStep, include: [SigningWorkflowSigner] },
-        // Include related permohonan numbers so frontend can filter by request numbers
-        { model: PermohonanPemusnahanLimbah, required: false, attributes: ['nomor_permohonan'] },
+        // Include related permohonan (with GolonganLimbah) so can_sign check for step 3 (APJ) works correctly.
+        // GolonganLimbah is needed by checkSigningAuthorization to determine recall/precursor vs standard workflow.
+        { 
+          model: PermohonanPemusnahanLimbah, 
+          required: false, 
+          attributes: ['nomor_permohonan', 'request_id', 'bagian', 'is_produk_pangan'],
+          include: [{ model: GolonganLimbah, attributes: ['nama'] }]
+        },
       ],
     };
 
@@ -1007,7 +1014,8 @@ const getAllBeritaAcara = async (req, res) => {
         }
       }
 
-      // Omit the embedded PermohonanPemusnahanLimbahs objects to avoid duplication
+      // Omit the embedded PermohonanPemusnahanLimbahs from the public response to avoid duplication,
+      // but keep them in a private field so checkSigningAuthorization (step 3 APJ logic) can use GolonganLimbah.
       const { PermohonanPemusnahanLimbahs, ...rest } = e;
       return {
         ...rest,
@@ -1017,6 +1025,8 @@ const getAllBeritaAcara = async (req, res) => {
         id: e.berita_acara_id, // Add an 'id' field for the frontend key
         currentStepLevel: current_step_level, // Match frontend property name
         SigningWorkflowSteps: steps,
+        // Internal-only: used by checkSigningAuthorization, stripped before response
+        _permohonanLimbahs: PermohonanPemusnahanLimbahs || [],
       };
     });
 
@@ -1024,15 +1034,24 @@ const getAllBeritaAcara = async (req, res) => {
     const transformedWithCanSign = await Promise.all(
       transformed.map(async (item) => {
         let can_sign = false;
+        console.log("🚀 ~ getAllBeritaAcara ~ item.current_signing_step_id:", item.current_signing_step_id)
         if (req.user && item.current_signing_step_id) {
           try {
-            can_sign = await checkSigningAuthorization(req.user, item);
+            // Pass PermohonanPemusnahanLimbahs (with GolonganLimbah) so step-3 APJ auth
+            // can correctly determine recall/precursor vs standard workflow dept requirement.
+            const itemForAuth = {
+              ...item,
+              PermohonanPemusnahanLimbahs: item._permohonanLimbahs || [],
+            };
+            can_sign = await checkSigningAuthorization(req.user, itemForAuth);
           } catch (authError) {
             can_sign = false;
           }
         }
+        // Strip the internal field before sending response
+        const { _permohonanLimbahs, ...itemForResponse } = item;
         return {
-          ...item,
+          ...itemForResponse,
           can_sign: !!can_sign,
         };
       })
