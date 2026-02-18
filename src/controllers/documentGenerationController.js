@@ -540,6 +540,15 @@ const getBeritaAcaraDataForDoc = async (req, res) => {
         head_of_plant.nama = inisialNameMap[head_of_plant.nama] || head_of_plant.nama;
         head_of_plant.user = inisialNameMap[head_of_plant.user] || head_of_plant.user;
 
+        // --- Determine whether BPOM signature field is applicable ---
+        // BPOM is only required for 'recall' and 'recall-precursor' golongan groups.
+        // For 'limbah-b3' group the field should display N/A instead of being empty.
+        const show_bpom = (beritaAcara.PermohonanPemusnahanLimbahs || []).some(p => {
+            const rawGolongan = p.GolonganLimbah?.nama || '';
+            const group = determineGroupFromGolongan(rawGolongan);
+            return group === 'recall' || group === 'recall-precursor';
+        });
+
         // --- Final JSON Response ---
         const docData = {
             divisi: beritaAcara.bagian,
@@ -551,6 +560,7 @@ const getBeritaAcaraDataForDoc = async (req, res) => {
             supervisor_bagian: beritaAcara.supervisor_bagian,
             supervisor_hse: beritaAcara.supervisor_hse,
             permohonan_list, // Use the new detailed list
+            show_bpom,       // true = recall/precursor → kosong (tanda tangan fisik); false = limbah-b3 → N/A
             signatures: {
                 hse_supervisor_officer,
                 hse_manager,
