@@ -57,7 +57,7 @@ const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
         isAuthorized = userDepartments.includes(requestDepartment);
 
       // APJ (step 2) requires department-based approval depending on golongan (e.g. Prekursor/OOT -> PN1, Recall -> QA)
-      // Additionally, for isProdukPangan requests, APJ HC (PJKPO) is also required
+      // Additionally, for isProdukPangan requests, APJ PC (PJKPO) is also required
       } else if (currentStepLevel === 2) {
         // Determine required approver department from golongan
         let requiredDept = null;
@@ -77,14 +77,14 @@ const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
             requiredDept = 'QA';
           }
 
-          // Add APJ HC (PJKPO) requirement for produk pangan requests
+          // Add APJ PC (PJKPO) requirement for produk pangan requests
           if (permohonan.is_produk_pangan) {
             if (Array.isArray(requiredDept)) {
-              requiredDept.push('HC');
+              requiredDept.push('PC');
             } else if (requiredDept) {
-              requiredDept = [requiredDept, 'HC'];
+              requiredDept = [requiredDept, 'PC'];
             } else {
-              requiredDept = 'HC';
+              requiredDept = 'PC';
             }
           }
         } catch (gErr) {
@@ -1219,7 +1219,7 @@ const approvePermohonan = async (req, res) => {
             const dept = String(userApj.Appr_DeptID).toUpperCase();
             if (dept === 'PN1') apjRole = 'PN';
             else if (dept === 'QA') apjRole = 'QA';
-            else if (dept === 'HC') apjRole = 'HC';
+            else if (dept === 'PC') apjRole = 'PC';
           }
         } catch (apjErr) {
           console.warn('[approvePermohonan] Failed to determine APJ role:', apjErr.message);
@@ -1444,9 +1444,9 @@ const approvePermohonan = async (req, res) => {
             // Pure Precursor: need APJ PN only
             requiredApjRoles = ['PN'];
           } else if (isRecall) {
-            // Pure Recall: need APJ QA, plus HC if produk pangan
+            // Pure Recall: need APJ QA, plus PC if produk pangan
             if (isProdukPangan) {
-              requiredApjRoles = ['QA', 'HC'];
+              requiredApjRoles = ['QA', 'PC'];
             } else {
               requiredApjRoles = ['QA'];
             }

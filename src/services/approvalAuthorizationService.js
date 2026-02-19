@@ -93,7 +93,7 @@ const checkUserCanApproveRequest = async (userId, request) => {
       
       // PJKPO special case
       if (isPJKPO) {
-        userAPJDepts.push('HC');
+        userAPJDepts.push('PC');
       }
       
       if (userAPJDepts.length === 0) {
@@ -110,7 +110,7 @@ const checkUserCanApproveRequest = async (userId, request) => {
       // Check if user has the required department
       if (requiresPN1 && userAPJDepts.includes('PN1')) return true;
       if (requiresQA && userAPJDepts.includes('QA')) return true;
-      if (requiresHC && userAPJDepts.includes('HC')) return true;
+      if (requiresHC && userAPJDepts.includes('PC')) return true;
       
       // For "Recall & Prekursor" (both keywords), accept either PN1 or QA
       if (golonganName.includes('recall') && golonganName.includes('prekursor')) {
