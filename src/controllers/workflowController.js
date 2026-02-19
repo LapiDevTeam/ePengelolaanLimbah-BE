@@ -407,9 +407,9 @@ const getApprovalWorkflowByRequest = async (req, res) => {
                     } else if (isPrecursor) {
                         requiredDepts = ['PN1'];
                     } else if (isRecall) {
-                        // For pure Recall with produk pangan, need both QA and HC
+                        // For pure Recall with produk pangan, need both QA and PC (PJKPO)
                         if (isProdukPangan) {
-                            requiredDepts = ['QA', 'HC'];
+                            requiredDepts = ['QA', 'PC'];
                         } else {
                             requiredDepts = ['QA'];
                         }
@@ -426,12 +426,12 @@ const getApprovalWorkflowByRequest = async (req, res) => {
                             // Fallback: create synthetic approvers for required departments
                             // This handles cases where external API doesn't have the expected data structure
                             filteredApprovers = requiredDepts.map(dept => {
-                                if (dept === 'HC') {
+                                if (dept === 'PC') {
                                     // Create synthetic PJKPO approver
                                     return {
                                         Appr_ID: 'PJKPO',
                                         emp_Name: 'PJKPO',
-                                        Appr_DeptID: 'HC',
+                                        Appr_DeptID: 'PC',
                                         Appr_CC: 'APJ'
                                     };
                                 } else if (dept === 'QA') {
@@ -586,7 +586,7 @@ const getApprovalWorkflowByRequest = async (req, res) => {
                             roleName = 'APJ PN';
                         } else if (dept === 'QA') {
                             roleName = 'APJ QA';
-                        } else if (dept === 'HC') {
+                        } else if (dept === 'PC') {
                             roleName = 'PJKPO';
                             stepName = 'PJKPO Approval';
                         }
@@ -615,8 +615,8 @@ const getApprovalWorkflowByRequest = async (req, res) => {
                                 // Match by name (case insensitive)
                                 const nameMatch = historyApproverName && a.emp_Name && 
                                     String(a.emp_Name).toLowerCase() === String(historyApproverName).toLowerCase();
-                                // For APJ HC department, also check if approver_id is 'PJKPO'
-                                const pjkpoMatch = dept === 'HC' && String(historyApproverId) === 'PJKPO';
+                                // For APJ PJKPO department, also check if approver_id is 'PJKPO'
+                                const pjkpoMatch = dept === 'PC' && String(historyApproverId) === 'PJKPO';
                                 
                                 return idMatch || nameMatch || pjkpoMatch;
                             });
@@ -673,7 +673,7 @@ const getApprovalWorkflowByRequest = async (req, res) => {
                     } else if (dept === 'QA') {
                         roleName = 'APJ QA';
                         stepName = 'APJ Approval';
-                    } else if (dept === 'HC') {
+                    } else if (dept === 'PC') {
                         roleName = 'PJKPO';
                         stepName = 'PJKPO Approval';
                     }
@@ -692,7 +692,7 @@ const getApprovalWorkflowByRequest = async (req, res) => {
                         const idMatch = String(approver.Appr_ID) === String(historyApproverId);
                         const nameMatch = historyApproverName && approver.emp_Name && 
                             String(approver.emp_Name).toLowerCase() === String(historyApproverName).toLowerCase();
-                        const pjkpoMatch = dept === 'HC' && String(historyApproverId) === 'PJKPO';
+                        const pjkpoMatch = dept === 'PC' && String(historyApproverId) === 'PJKPO';
                         
                         return idMatch || nameMatch || pjkpoMatch;
                     });
@@ -984,9 +984,9 @@ const getSigningWorkflowByRequest = async (req, res) => {
                     } else if (hasPrecursor) {
                         requiredDepts = ['PN1'];
                     } else if (hasRecall) {
-                        // For pure Recall with produk pangan, need both QA and HC
+                        // For pure Recall with produk pangan, need both QA and PC (PJKPO)
                         if (hasProdukPangan) {
-                            requiredDepts = ['QA', 'HC'];
+                            requiredDepts = ['QA', 'PC'];
                         } else {
                             requiredDepts = ['QA'];
                         }
@@ -1004,11 +1004,11 @@ const getSigningWorkflowByRequest = async (req, res) => {
                         } else {
                             // Fallback: create synthetic signers for required departments
                             filteredSigners = requiredDepts.map(dept => {
-                                if (dept === 'HC') {
+                                if (dept === 'PC') {
                                     return {
                                         Appr_ID: 'PJKPO',
                                         emp_Name: 'PJKPO',
-                                        Appr_DeptID: 'HC',
+                                        Appr_DeptID: 'PC',
                                         Appr_CC: 'APJ'
                                     };
                                 } else if (dept === 'QA') {
@@ -1070,7 +1070,7 @@ const getSigningWorkflowByRequest = async (req, res) => {
                             roleName = 'APJ PN';
                         } else if (dept === 'QA') {
                             roleName = 'APJ QA';
-                        } else if (dept === 'HC') {
+                        } else if (dept === 'PC') {
                             roleName = 'PJKPO';
                             stepName = 'PJKPO Approval';
                         } else {
@@ -1091,7 +1091,7 @@ const getSigningWorkflowByRequest = async (req, res) => {
                             const roleMatch = jab.match(/APJ_ROLE:(\w+)/);
                             if (dept === 'PN1' && roleMatch && roleMatch[1] === 'PN') return true;
                             if (dept === 'QA' && roleMatch && roleMatch[1] === 'QA') return true;
-                            if (dept === 'HC' && roleMatch && roleMatch[1] === 'HC') return true;
+                            if (dept === 'PC' && roleMatch && roleMatch[1] === 'PC') return true;
                             // Fallback: match by signer_id
                             return h.signer_id === signer.Appr_ID;
                         });
@@ -1283,7 +1283,7 @@ const getSigningWorkflowByRequest = async (req, res) => {
                     const requiredRoles = [];
                     if (hasPrecursor) requiredRoles.push('PN');
                     if (hasRecall) requiredRoles.push('QA');
-                    if (hasRecall && hasProdukPangan) requiredRoles.push('HC');
+                    if (hasRecall && hasProdukPangan) requiredRoles.push('PC');
                     
                     const allRolesSigned = requiredRoles.every(role => signedRoles.has(role));
                     const isStepSigned = allRolesSigned && stepHistory.length >= requiredRoles.length;
