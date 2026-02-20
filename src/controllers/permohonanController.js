@@ -248,15 +248,9 @@ const createPermohonan = async (req, res) => {
         const detailItems = details.map(detail => ({ ...detail, request_id: permohonan.request_id }));
         await DetailLimbah.bulkCreate(detailItems, { transaction });
 
-        // Compute jumlah_item as number of unique (nama_limbah, nomor_analisa) pairs
+        // Compute jumlah_item as total number of detail/lampiran rows
         try {
-          const pairSet = new Set();
-          (details || []).forEach(d => {
-            const name = (d.nama_limbah || '').toString().trim();
-            const analisa = (d.nomor_analisa || '').toString().trim();
-            pairSet.add(`${name}|||${analisa}`);
-          });
-          permohonan.jumlah_item = pairSet.size;
+          permohonan.jumlah_item = (details || []).length;
           await permohonan.save({ transaction });
         } catch (e) {
           console.warn('[createPermohonan] Failed to compute jumlah_item:', e && e.message);
@@ -1724,15 +1718,9 @@ const updatePermohonan = async (req, res) => {
             
             const createdDetails = await DetailLimbah.bulkCreate(detailItems, { transaction });
 
-            // Recompute jumlah_item for this permohonan and persist it
+            // Recompute jumlah_item as total number of detail/lampiran rows
             try {
-              const pairSet = new Set();
-              (updatedData.details || []).forEach(d => {
-                const name = (d.nama_limbah || '').toString().trim();
-                const analisa = (d.nomor_analisa || '').toString().trim();
-                pairSet.add(`${name}|||${analisa}`);
-              });
-              permohonan.jumlah_item = pairSet.size;
+              permohonan.jumlah_item = (updatedData.details || []).length;
               await permohonan.save({ transaction });
             } catch (e) {
               console.warn('[updatePermohonan] Failed to compute jumlah_item:', e && e.message);
