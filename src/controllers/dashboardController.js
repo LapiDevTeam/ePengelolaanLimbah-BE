@@ -222,26 +222,17 @@ exports.getDashboardStats = async (req, res) => {
                         }
                     ],
                     where: {
-                        requester_id: { [Op.ne]: userId }
+                        requester_id: { [Op.ne]: userId },
+                        status: { [Op.ne]: 'Completed' }
                     }
                 });
 
-                // Filter out requests where current step needs user's approval but hasn't been processed yet
-                const filteredApproved = approvedRequests.filter(request => {
-                    // If no current step (completed), always show in Approved
-                    if (!request.current_step_id || !request.CurrentStep) {
-                        return true;
-                    }
-                    
-                    // Check if user already processed current step
-                    const hasProcessedCurrent = hasUserProcessedCurrentStep(request, userId);
-                    return hasProcessedCurrent;
-                });
-
-                approvedCount = filteredApproved.length;
+                // Data persists in Approved tab until request becomes Completed
+                // (already excluded at SQL level above)
+                approvedCount = approvedRequests.length;
 
                 // Group by golongan
-                for (const request of filteredApproved) {
+                for (const request of approvedRequests) {
                     const golonganName = request.GolonganLimbah?.nama;
                     const group = determineGroupFromGolongan(golonganName);
                     if (group && approvedByGroup.hasOwnProperty(group)) {

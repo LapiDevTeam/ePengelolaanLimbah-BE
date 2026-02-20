@@ -575,8 +575,7 @@ const getAllPermohonan = async (req, res) => {
     // Filter to requests processed (approved or rejected) by the current user
     // This is used by the frontend "Approved" tab: show ALL requests where
     // the current user has an ApprovalHistory entry (Approved or Rejected)
-    // at ANY step that matches their approval authority, regardless of whether
-    // the request is still InProgress or already Completed.
+    // at ANY step. Data persists here until the request status becomes Completed.
     if (processedBy === 'true' || processedBy === true) {
       queryOptions.include.push({
         model: ApprovalHistory,
@@ -598,21 +597,24 @@ const getAllPermohonan = async (req, res) => {
         }
       });
 
-      // Exclude requests created by the same user
-      // Merge with existing whereClause if it exists (from search filters)
+      // Exclude requests created by the same user AND exclude Completed requests
+      const processedByConditions = [
+        { requester_id: { [Op.ne]: filteringUser.log_NIK } },
+        { status: { [Op.ne]: 'Completed' } }
+      ];
+
       if (Object.keys(queryOptions.where).length > 0) {
-        // Combine with existing conditions using Op.and
         queryOptions.where = {
           [Op.and]: [
             queryOptions.where,
-            { requester_id: { [Op.ne]: filteringUser.log_NIK } }
+            ...processedByConditions
           ]
         };
       } else {
-        queryOptions.where.requester_id = { [Op.ne]: filteringUser.log_NIK };
+        queryOptions.where = { [Op.and]: processedByConditions };
       }
       
-      // Add CurrentStep for post-processing check
+      // Add CurrentStep for display purposes
       if (!queryOptions.include.some(inc => inc.as === 'CurrentStep')) {
         queryOptions.include.push({
           model: ApprovalWorkflowStep,
@@ -803,18 +805,16 @@ const getAllPermohonan = async (req, res) => {
     }
     
     if (processedBy === 'true' || processedBy === true) {
-      // Use unified service to check if user already processed current step
+      // The SQL query already filters by ApprovalHistory (user has processed)
+      // and excludes Completed status. No additional post-filtering needed.
+      // Just deduplicate in case a user has multiple history entries for the same request.
+      const seenIds = new Set();
       filteredList = filteredList.filter(request => {
-        // If no current step (completed/rejected), always show in Processed
-        if (!request.current_step_id || !request.CurrentStep) {
-          return true;
-        }
-        
-        // Check if user already processed current step using service
-        const hasProcessedCurrent = hasUserProcessedCurrentStep(request, filteringUser.log_NIK);
-        return hasProcessedCurrent;
+        const rid = request.request_id;
+        if (seenIds.has(rid)) return false;
+        seenIds.add(rid);
+        return true;
       });
-      
       filteredCount = filteredList.length;
     }
     
