@@ -298,7 +298,6 @@ const getAllPermohonan = async (req, res) => {
       additionalGroups = ''
     } = req.query;
     const { user, delegatedUser } = req;
-    console.log("🚀 ~ getAllPermohonan ~ user:", user)
     // For data filtering: use the actual logged-in user, not the delegated user
     // For actions: use delegatedUser if available (handled in other operations)
     const filteringUser = user; // Always use the logged-in user for filtering

@@ -161,7 +161,6 @@ const checkSigningAuthorization = async (authorizingUser, beritaAcara) => {
     }
   }
 
-  console.log("🚀 ~ checkSigningAuthorization ~ isAuthorized:", isAuthorized)
   return isAuthorized;
 };
 
@@ -1034,7 +1033,6 @@ const getAllBeritaAcara = async (req, res) => {
     const transformedWithCanSign = await Promise.all(
       transformed.map(async (item) => {
         let can_sign = false;
-        console.log("🚀 ~ getAllBeritaAcara ~ item.current_signing_step_id:", item.current_signing_step_id)
         if (req.user && item.current_signing_step_id) {
           try {
             // Pass PermohonanPemusnahanLimbahs (with GolonganLimbah) so step-3 APJ auth

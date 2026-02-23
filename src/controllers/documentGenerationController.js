@@ -1267,7 +1267,6 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
             ],
             order: [['created_at', 'DESC']]
         });
-        console.log("🚀 ~ Total permohonan found (before scope filter):", permohonanList.length);
 
         // --- Apply scope-based filtering ---
         // This filters based on user's access to bagian for each golongan group
@@ -1285,7 +1284,6 @@ const downloadPermohonanByDateRangeExcel = async (req, res) => {
             return permohonanBagian === normalizedUserBagian;
         });
 
-        console.log("🚀 ~ After scope filter:", scopeFilteredList.length);
 
         // --- Filter permohonan: Completed, Rejected, or InProgress with verification completed ---
         const filteredPermohonanList = scopeFilteredList.filter(permohonan => {
