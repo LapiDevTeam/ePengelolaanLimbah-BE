@@ -95,34 +95,33 @@ exports.getDashboardStats = async (req, res) => {
             'recall-precursor': 0
         });
 
-        // 1. Count "My Requests" - all requests created by this user (excluding Completed) with group breakdown
+        // 1. Count "Dept. Requests" - all requests from user's department (all statuses, including Completed)
         let myRequestsCount = 0;
         const myRequestsByGroup = initGroupBreakdown();
         
         try {
-            const myRequests = await PermohonanPemusnahanLimbah.findAll({
-                where: { 
-                    requester_id: userId,
-                    status: { [Op.ne]: 'Completed' } // Exclude completed requests
-                },
-                include: [{
-                    model: GolonganLimbah,
-                    required: false
-                }]
-            });
+            if (userBagian) {
+                const deptRequests = await PermohonanPemusnahanLimbah.findAll({
+                    where: { bagian: userBagian },
+                    include: [{
+                        model: GolonganLimbah,
+                        required: false
+                    }]
+                });
 
-            myRequestsCount = myRequests.length;
+                myRequestsCount = deptRequests.length;
 
-            // Group by golongan
-            for (const request of myRequests) {
-                const golonganName = request.GolonganLimbah?.nama;
-                const group = determineGroupFromGolongan(golonganName);
-                if (group && myRequestsByGroup.hasOwnProperty(group)) {
-                    myRequestsByGroup[group]++;
+                // Group by golongan
+                for (const request of deptRequests) {
+                    const golonganName = request.GolonganLimbah?.nama;
+                    const group = determineGroupFromGolongan(golonganName);
+                    if (group && myRequestsByGroup.hasOwnProperty(group)) {
+                        myRequestsByGroup[group]++;
+                    }
                 }
             }
         } catch (countError) {
-            console.error('[getDashboardStats] Error counting my requests:', countError.message);
+            console.error('[getDashboardStats] Error counting dept requests:', countError.message);
         }
 
         // 2. Count "Pending Approvals" - requests waiting for this user's approval
