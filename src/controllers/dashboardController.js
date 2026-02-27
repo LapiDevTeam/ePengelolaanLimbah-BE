@@ -2,7 +2,8 @@ const {
     PermohonanPemusnahanLimbah,
     ApprovalWorkflowStep,
     ApprovalHistory,
-    GolonganLimbah
+    GolonganLimbah,
+    BeritaAcara
 } = require('../models');
 const { Op } = require('sequelize');
 const { 
@@ -95,7 +96,9 @@ exports.getDashboardStats = async (req, res) => {
             'recall-precursor': 0
         });
 
-        // 1. Count "Dept. Requests" - all requests from user's department (all statuses, including Completed)
+        // 1. Count "Dept. Requests" - active requests from user's department
+        //    Mirrors the Daftar Ajuan (deptOnly) list: Completed permohonan are hidden
+        //    once their linked BAP is also Completed (or they have no BAP at all).
         let myRequestsCount = 0;
         const myRequestsByGroup = initGroupBreakdown();
         
@@ -103,16 +106,31 @@ exports.getDashboardStats = async (req, res) => {
             if (userBagian) {
                 const deptRequests = await PermohonanPemusnahanLimbah.findAll({
                     where: { bagian: userBagian },
-                    include: [{
-                        model: GolonganLimbah,
-                        required: false
-                    }]
+                    include: [
+                        {
+                            model: GolonganLimbah,
+                            required: false
+                        },
+                        // Include BAP so we can apply the same hide-completed logic as the list
+                        {
+                            model: BeritaAcara,
+                            required: false,
+                            attributes: ['berita_acara_id', 'status']
+                        }
+                    ]
                 });
 
-                myRequestsCount = deptRequests.length;
+                // Filter: hide Completed permohonan whose BAP is also Completed (or has no BAP)
+                const visibleRequests = deptRequests.filter(request => {
+                    if (request.status !== 'Completed') return true;
+                    const bapStatus = request.BeritaAcara?.status || null;
+                    return bapStatus !== null && bapStatus !== 'Completed';
+                });
+
+                myRequestsCount = visibleRequests.length;
 
                 // Group by golongan
-                for (const request of deptRequests) {
+                for (const request of visibleRequests) {
                     const golonganName = request.GolonganLimbah?.nama;
                     const group = determineGroupFromGolongan(golonganName);
                     if (group && myRequestsByGroup.hasOwnProperty(group)) {

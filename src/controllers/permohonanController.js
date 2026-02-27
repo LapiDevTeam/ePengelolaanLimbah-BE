@@ -427,7 +427,9 @@ const getAllPermohonan = async (req, res) => {
         { model: DetailLimbah, required: false },
         { model: ApprovalWorkflowStep, as: 'CurrentStep', required: false, include: [ApprovalWorkflowApprover] },
         { model: GolonganLimbah, required: true },
-        { model: JenisLimbahB3, required: true }
+        { model: JenisLimbahB3, required: true },
+        // Always include BeritaAcara so bap_status is populated for every query
+        { model: BeritaAcara, required: false, attributes: ['berita_acara_id', 'status'] }
       ],
       limit: parseInt(limit),
       offset: offset,
@@ -562,21 +564,10 @@ const getAllPermohonan = async (req, res) => {
       const userConditions = [{ requester_id: filteringUser.log_NIK }];
       
       // NOTE: excludeCompleted no longer adds a WHERE status != 'Completed' here.
-      // Instead, we include the BeritaAcara association and do post-processing:
-      // a Completed permohonan is hidden ONLY when its linked BAP is also Completed
-      // (or when there is no BAP linked at all, meaning it truly finished without one).
+      // Instead, BeritaAcara is always included (see base queryOptions) and post-processing
+      // hides Completed permohonan only when its linked BAP is also Completed.
       // This allows Completed permohonan to stay visible while the BAP is still in progress.
-      if (excludeCompleted === 'true' || excludeCompleted === true) {
-        // Include BeritaAcara so its status is available in post-processing
-        if (!queryOptions.include.some(inc => inc.model === BeritaAcara)) {
-          queryOptions.include.push({
-            model: BeritaAcara,
-            required: false,
-            attributes: ['berita_acara_id', 'status']
-          });
-        }
-      }
-      
+
       if (Object.keys(queryOptions.where).length > 0) {
         // Combine with existing conditions using Op.and
         queryOptions.where = {
@@ -722,7 +713,9 @@ const getAllPermohonan = async (req, res) => {
                                  (processedBy === 'true' || processedBy === true) || 
                                  needsPostQueryFilter ||
                                  needsVerificationStepFilter ||
-                                 (excludeCompleted === 'true' || excludeCompleted === true);
+                                 (excludeCompleted === 'true' || excludeCompleted === true) ||
+                                 // deptOnly: hide Completed permohonan whose BAP is also Completed
+                                 (deptOnly === 'true' || deptOnly === true);
     let queryOptionsForDB = { ...queryOptions };
     
     if (needsPostProcessing) {
@@ -739,10 +732,13 @@ const getAllPermohonan = async (req, res) => {
     let filteredList = permohonanList;
     let filteredCount = count;
     
-    // Post-processing for My Requests tab: hide Completed permohonan whose BAP is also Completed
-    // (or has no BAP at all — meaning it finished without ever producing a BAP).
+    // Hide Completed permohonan whose BAP is also Completed (or has no BAP at all).
+    // Applies to:
+    //   - excludeCompleted=true (My Requests tab, personal view)
+    //   - deptOnly=true (Dept. Requests tab, dept-wide view)
     // Permohonan that are Completed but whose BAP is still Draft/InProgress/Rejected stay visible.
-    if (excludeCompleted === 'true' || excludeCompleted === true) {
+    if ((excludeCompleted === 'true' || excludeCompleted === true) ||
+        (deptOnly === 'true' || deptOnly === true)) {
       filteredList = filteredList.filter(request => {
         const itemData = request.toJSON ? request.toJSON() : request;
         if (itemData.status !== 'Completed') return true; // keep non-Completed as-is
