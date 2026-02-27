@@ -295,7 +295,10 @@ const getAllPermohonan = async (req, res) => {
       // New params for all-permohonan tab (non-KL users)
       filterByBagian = false,
       userBagian = '',
-      additionalGroups = ''
+      additionalGroups = '',
+      // Dept. Requests tab: show only requests from user's department
+      deptOnly = false,
+      userDept = ''
     } = req.query;
     const { user, delegatedUser } = req;
     // For data filtering: use the actual logged-in user, not the delegated user
@@ -533,6 +536,26 @@ const getAllPermohonan = async (req, res) => {
       }
     }
     
+    // Filter by user's department (Dept. Requests tab)
+    if ((deptOnly === 'true' || deptOnly === true) && userDept) {
+      const normalizedUserDept = String(userDept).toUpperCase();
+      const deptCondition = Sequelize.where(
+        Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')),
+        normalizedUserDept
+      );
+
+      if (Object.keys(queryOptions.where).length > 0) {
+        queryOptions.where = {
+          [Op.and]: [
+            queryOptions.where,
+            deptCondition
+          ]
+        };
+      } else {
+        queryOptions.where = deptCondition;
+      }
+    }
+
     // Filter by user's own requests if userOnly is specified
     if (userOnly === 'true' || userOnly === true) {
       // Merge with existing whereClause if it exists (from search filters)
