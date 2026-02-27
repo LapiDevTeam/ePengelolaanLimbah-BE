@@ -295,10 +295,7 @@ const getAllPermohonan = async (req, res) => {
       // New params for all-permohonan tab (non-KL users)
       filterByBagian = false,
       userBagian = '',
-      additionalGroups = '',
-      // Dept. Requests tab: show all requests from user's department
-      deptOnly = false,
-      userDept = ''
+      additionalGroups = ''
     } = req.query;
     const { user, delegatedUser } = req;
     // For data filtering: use the actual logged-in user, not the delegated user
@@ -571,23 +568,6 @@ const getAllPermohonan = async (req, res) => {
         } else {
           queryOptions.where = { [Op.and]: userConditions };
         }
-      }
-    }
-
-    // Filter by user's department (Dept. Requests tab)
-    // Shows all permohonan from the same department as the logged-in user, regardless of status.
-    if ((deptOnly === 'true' || deptOnly === true) && userDept && String(userDept).trim()) {
-      const normalizedDept = String(userDept).trim().toUpperCase();
-      const deptCondition = Sequelize.where(
-        Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')),
-        normalizedDept
-      );
-      if (Object.keys(queryOptions.where).length > 0) {
-        queryOptions.where = {
-          [Op.and]: [queryOptions.where, deptCondition]
-        };
-      } else {
-        queryOptions.where = deptCondition;
       }
     }
 
@@ -1013,11 +993,22 @@ const submitPermohonan = async (req, res) => {
             return res.status(404).json({ message: 'Permohonan not found' });
         }
 
-        // Authorization: Only the original requester or their delegated user can submit their own draft
-        const isRequester = permohonan.requester_id === actingUser.log_NIK || permohonan.requester_id_delegated === actingUser.log_NIK;
-        if (!isRequester) {
+        // Authorization: Anyone in the same department as the request can submit a Draft.
+        // Explicit delegation (requester_id_delegated) also grants permission regardless of dept.
+        const isSameDept = permohonan.bagian && actingUser.emp_DeptID &&
+          String(permohonan.bagian).toUpperCase() === String(actingUser.emp_DeptID).toUpperCase();
+        const isDelegated = permohonan.requester_id_delegated === actingUser.log_NIK;
+        if (!isSameDept && !isDelegated) {
           await transaction.rollback();
-          return res.status(403).json({ message: 'You are not authorized to submit this request.' });
+          return res.status(403).json({ message: 'You are not authorized to submit this request. Only members of the same department can submit.' });
+        }
+
+        // Job level restriction: Job_LevelID >= 7 (operator/pelaksana) cannot submit.
+        // Only Job_LevelID 1-6 (supervisor and above) may submit ajuan.
+        const actingJobLevel = Number(actingUser.Job_LevelID || user.Job_LevelID || 0);
+        if (actingJobLevel >= 7) {
+          await transaction.rollback();
+          return res.status(403).json({ message: 'Your job level does not permit submitting requests. Please ask a supervisor or above to submit.' });
         }
 
         // Ensure it's actually a draft
@@ -1688,9 +1679,13 @@ const updatePermohonan = async (req, res) => {
         const isDraft = permohonan.status === 'Draft';
         const isManagerStep = permohonan.CurrentStep && permohonan.CurrentStep.step_level === 1;
 
-        // Allow pemohon to edit draft (including drafts returned from manager rejection)
-        // Accept either the original requester or the delegated requester
-        if (isDraft && (permohonan.requester_id === actingUser.log_NIK || permohonan.requester_id_delegated === actingUser.log_NIK)) {
+        // Allow anyone in the same department to edit a Draft (including Drafts returned from manager rejection).
+        // Explicit delegation also grants edit permission regardless of dept.
+        const isSameDeptEdit = permohonan.bagian && actingUser.emp_DeptID &&
+          String(permohonan.bagian).toUpperCase() === String(actingUser.emp_DeptID).toUpperCase();
+        const isDelegatedEdit = permohonan.requester_id_delegated === actingUser.log_NIK;
+
+        if (isDraft && (isSameDeptEdit || isDelegatedEdit)) {
           isAuthorized = true;
         } 
         // Allow manager to edit at first approval step - use external API authorization
@@ -1785,6 +1780,7 @@ const deletePermohonan = async (req, res) => {
     try {
         const { id } = req.params;
         const { user, delegatedUser } = req;
+        console.log("🚀 ~ deletePermohonan ~ user:", user)
         const actingUser = delegatedUser || user;
 
         const permohonan = await PermohonanPemusnahanLimbah.findByPk(id, { transaction });
@@ -1794,10 +1790,22 @@ const deletePermohonan = async (req, res) => {
             return res.status(404).json({ message: 'Permohonan not found' });
         }
 
-        // Allow deletion by original requester or delegated requester
-        if (permohonan.requester_id !== actingUser.log_NIK && permohonan.requester_id_delegated !== actingUser.log_NIK) {
+        // Authorization: Anyone in the same department as the request can delete a Draft/Rejected.
+        // Explicit delegation also grants permission regardless of dept.
+        const isSameDeptDel = permohonan.bagian && actingUser.emp_DeptID &&
+          String(permohonan.bagian).toUpperCase() === String(actingUser.emp_DeptID).toUpperCase();
+        const isDelegatedDel = permohonan.requester_id_delegated === actingUser.log_NIK;
+        if (!isSameDeptDel && !isDelegatedDel) {
           await transaction.rollback();
-          return res.status(403).json({ message: 'You are not authorized to delete this request.' });
+          return res.status(403).json({ message: 'You are not authorized to delete this request. Only members of the same department can delete.' });
+        }
+
+        // Job level restriction: Job_LevelID >= 7 (operator/pelaksana) cannot delete.
+        // Only Job_LevelID 1-6 (supervisor and above) may delete ajuan.
+        const actingJobLevel = Number(actingUser.Job_LevelID || user.Job_LevelID || 0);
+        if (actingJobLevel >= 7) {
+          await transaction.rollback();
+          return res.status(403).json({ message: 'Your job level does not permit deleting requests. Please ask a supervisor or above to delete.' });
         }
         
         // Allow deletion for drafts (including returned from manager) and permanently rejected requests
