@@ -307,6 +307,13 @@ const getAllPermohonan = async (req, res) => {
     
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
+  // Helper: Object.keys() does NOT return Symbol keys (e.g. Op.or, Op.and).
+  // Sequelize operators are Symbols, so we must also check getOwnPropertySymbols.
+  const hasWhereConditions = (obj) => {
+    if (!obj || typeof obj !== 'object') return false;
+    return Object.keys(obj).length > 0 || Object.getOwnPropertySymbols(obj).length > 0;
+  };
+
   // --- SEARCH LOGIC ---
   // Columns that will be filtered post-query (to avoid SQL join issues)
   const postQueryFilterColumns = ['status', 'namaLimbah', 'nomorAnalisa', 'bobot'];
@@ -513,7 +520,7 @@ const getAllPermohonan = async (req, res) => {
       // Apply bagian filter (OR with additional groups if any)
       if (bagianConditions.length > 1) {
         // Combine with existing where using AND
-        if (Object.keys(queryOptions.where).length > 0) {
+        if (hasWhereConditions(queryOptions.where)) {
           queryOptions.where = {
             [Op.and]: [
               queryOptions.where,
@@ -525,7 +532,7 @@ const getAllPermohonan = async (req, res) => {
         }
       } else {
         // Only bagian filter (no additional groups)
-        if (Object.keys(queryOptions.where).length > 0) {
+        if (hasWhereConditions(queryOptions.where)) {
           queryOptions.where = {
             [Op.and]: [
               queryOptions.where,
@@ -546,7 +553,7 @@ const getAllPermohonan = async (req, res) => {
         normalizedUserDept
       );
 
-      if (Object.keys(queryOptions.where).length > 0) {
+      if (hasWhereConditions(queryOptions.where)) {
         queryOptions.where = {
           [Op.and]: [
             queryOptions.where,
@@ -568,7 +575,7 @@ const getAllPermohonan = async (req, res) => {
       // hides Completed permohonan only when its linked BAP is also Completed.
       // This allows Completed permohonan to stay visible while the BAP is still in progress.
 
-      if (Object.keys(queryOptions.where).length > 0) {
+      if (hasWhereConditions(queryOptions.where)) {
         // Combine with existing conditions using Op.and
         queryOptions.where = {
           [Op.and]: [
@@ -616,7 +623,7 @@ const getAllPermohonan = async (req, res) => {
         { status: { [Op.ne]: 'Completed' } }
       ];
 
-      if (Object.keys(queryOptions.where).length > 0) {
+      if (hasWhereConditions(queryOptions.where)) {
         queryOptions.where = {
           [Op.and]: [
             queryOptions.where,
@@ -648,7 +655,7 @@ const getAllPermohonan = async (req, res) => {
         }
       };
       
-      if (Object.keys(queryOptions.where).length > 0) {
+      if (hasWhereConditions(queryOptions.where)) {
         // Combine with existing search conditions
         queryOptions.where = {
           [Op.and]: [
