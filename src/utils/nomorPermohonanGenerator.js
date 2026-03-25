@@ -5,7 +5,7 @@ const { Op } = require("sequelize");
  * Generates a unique nomor_permohonan following the format:
  * AAAAA/KL-PL/[P/C]/BB/CC
  *
- * AAAAA : Request number (starts from 00001 all the way to 99999)
+ * AAAAA : Request number (starts from 00001 up to 99999)
  * KL-PL : Leave as is, 'KL-PL' for all requests
  * P/C : If bentuk_limbah is Padat, 'P'. If Cair, 'C'
  * BB : Month (format: 01, 02, up to 12)
@@ -21,6 +21,8 @@ const generateNomorPermohonan = async (bentuk_limbah, transaction) => {
   try {
     console.log("Generating nomor permohonan for bentuk_limbah:", bentuk_limbah);
     const jakartaTime = require("./jakartaTime");
+    const SPECIAL_START_YEAR = 2026;
+    const SPECIAL_START_REQUEST_NUMBER = 2383;
 
     // Validate bentuk_limbah parameter
     if (!bentuk_limbah || (bentuk_limbah !== "Padat" && bentuk_limbah !== "Cair")) {
@@ -32,6 +34,8 @@ const generateNomorPermohonan = async (bentuk_limbah, transaction) => {
     const m = nowIsoJakarta.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/);
     const currentYear = m ? parseInt(m[1], 10) : new Date().getFullYear();
     const currentMonth = m ? parseInt(m[2], 10) : new Date().getMonth() + 1;
+    const defaultStartRequestNumber =
+      currentYear === SPECIAL_START_YEAR ? SPECIAL_START_REQUEST_NUMBER : 1;
 
     // Format year as last 2 digits (e.g., 2024 -> 24)
     const yearSuffix = currentYear.toString().slice(-2);
@@ -60,7 +64,7 @@ const generateNomorPermohonan = async (bentuk_limbah, transaction) => {
       transaction,
     });
 
-    let nextRequestNumber = 1;
+    let nextRequestNumber = defaultStartRequestNumber;
 
     if (lastRequest && lastRequest.nomor_permohonan) {
       // Extract the request number from the last nomor_permohonan
@@ -69,7 +73,8 @@ const generateNomorPermohonan = async (bentuk_limbah, transaction) => {
       if (parts.length >= 1) {
         const lastRequestNumber = parseInt(parts[0], 10);
         if (!isNaN(lastRequestNumber)) {
-          nextRequestNumber = lastRequestNumber + 1;
+          const nextFromLast = lastRequestNumber + 1;
+          nextRequestNumber = Math.max(nextFromLast, defaultStartRequestNumber);
         }
       }
     }
