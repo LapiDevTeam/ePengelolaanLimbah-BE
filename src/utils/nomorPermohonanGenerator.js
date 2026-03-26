@@ -22,7 +22,7 @@ const generateNomorPermohonan = async (bentuk_limbah, transaction) => {
     console.log("Generating nomor permohonan for bentuk_limbah:", bentuk_limbah);
     const jakartaTime = require("./jakartaTime");
     const SPECIAL_START_YEAR = 2026;
-    const SPECIAL_START_REQUEST_NUMBER = 2383;
+    const SPECIAL_START_REQUEST_NUMBER = 2546;
 
     // Validate bentuk_limbah parameter
     if (!bentuk_limbah || (bentuk_limbah !== "Padat" && bentuk_limbah !== "Cair")) {
