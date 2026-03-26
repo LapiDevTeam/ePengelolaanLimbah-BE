@@ -1,25 +1,40 @@
-const jwt = require('jsonwebtoken');
+const axios = require('axios');
+
+const DECODE_URL =
+  process.env.GLOBAL_API_URL ||
+  process.env.LMS_DECODE_URL ||
+  process.env.LMS_URL ||
+  'http://192.168.1.38/api/lms-dev/v1/decode';
+
+const getTokenFromRequest = (req) => {
+  const authorization = req.headers.authorization || req.headers.Authorization;
+  if (authorization && authorization.startsWith('Bearer ')) {
+    return authorization.split(' ')[1];
+  }
+
+  const authentication = req.headers.authentication;
+  if (authentication) {
+    if (authentication.startsWith('Bearer ')) {
+      return authentication.split(' ')[1];
+    }
+    return authentication;
+  }
+
+  if (req.query.token) {
+    return req.query.token;
+  }
+
+  return null;
+};
 
 /**
  * Auth middleware yang support token dari query parameter
  * Digunakan khusus untuk endpoint yang dibuka via window.open()
  * yang tidak bisa mengirim Authorization header
  */
-const authMiddlewareWithQuery = (req, res, next) => {
-  let token = null;
+const authMiddlewareWithQuery = async (req, res, next) => {
+  const token = getTokenFromRequest(req);
 
-  // 1. Coba ambil token dari Authorization header (prioritas utama)
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.split(' ')[1];
-  }
-
-  // 2. Jika tidak ada di header, coba ambil dari query parameter
-  if (!token && req.query.token) {
-    token = req.query.token;
-  }
-
-  // 3. Jika masih tidak ada token, tolak request
   if (!token) {
     return res.status(401).json({ 
       success: false,
@@ -28,23 +43,39 @@ const authMiddlewareWithQuery = (req, res, next) => {
   }
 
   try {
-    // 4. Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const response = await axios.get(DECODE_URL, {
+      headers: {
+        access_token: token,
+      },
+    });
+    const decoded = response && response.data ? response.data : {};
 
-    // 5. Attach user info ke request object
+    if (!decoded?.user?.log_NIK) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid or expired token.'
+      });
+    }
+
     req.user = decoded.user;
     
-    // Delegated User (if any)
     if (decoded.delegatedTo) {
       req.delegatedUser = decoded.delegatedTo;
     }
 
-    // 6. Lanjutkan ke controller
     next();
   } catch (error) {
-    return res.status(401).json({ 
+    const statusCode = error?.response?.status || 500;
+    if (statusCode === 401 || statusCode === 403) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid or expired token.'
+      });
+    }
+
+    return res.status(503).json({ 
       success: false,
-      message: 'Invalid or expired token.' 
+      message: 'Unable to validate token from LMS decode service.' 
     });
   }
 };

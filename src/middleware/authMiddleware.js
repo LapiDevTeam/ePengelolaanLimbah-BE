@@ -1,31 +1,61 @@
-const jwt = require('jsonwebtoken');
+const axios = require('axios');
 
-const authMiddleware = (req, res, next) => {
-  // 1. Get the token from the Authorization header
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+const DECODE_URL =
+  process.env.GLOBAL_API_URL ||
+  process.env.LMS_DECODE_URL ||
+  process.env.LMS_URL ||
+  'http://192.168.1.38/api/lms-dev/v1/decode';
+
+const getTokenFromHeaders = (req) => {
+  const authorization = req.headers.authorization || req.headers.Authorization;
+  if (authorization && authorization.startsWith('Bearer ')) {
+    return authorization.split(' ')[1];
+  }
+
+  const authentication = req.headers.authentication;
+  if (!authentication) return null;
+
+  if (authentication.startsWith('Bearer ')) {
+    return authentication.split(' ')[1];
+  }
+
+  return authentication;
+};
+
+const authMiddleware = async (req, res, next) => {
+  const token = getTokenFromHeaders(req);
+  if (!token) {
     return res.status(401).json({ message: 'Authentication token required.' });
   }
-  const token = authHeader.split(' ')[1];
 
   try {
-    // 2. Verify the token
-    // IMPORTANT: You MUST have the same JWT_SECRET that the company's API uses to sign the token.
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const response = await axios.get(DECODE_URL, {
+      headers: {
+        access_token: token,
+      },
+    });
+    const decoded = response && response.data ? response.data : {};
 
-    // 3. Attach user and delegation info to the request object
-    req.user = decoded.user; // Primary user
-    
-    // Delegated User (if delegated)
+    if (!decoded?.user?.log_NIK) {
+      return res.status(401).json({ message: 'Invalid or expired token.' });
+    }
+
+    req.user = decoded.user;
+
     if (decoded.delegatedTo) {
       req.delegatedUser = decoded.delegatedTo;
     }
 
-    // 4. Pass control to the next handler (your controller)
     next();
   } catch (error) {
-    // If the token is invalid (e.g., expired, bad signature)
-    return res.status(401).json({ message: 'Invalid or expired token.' });
+    const statusCode = error?.response?.status || 500;
+    if (statusCode === 401 || statusCode === 403) {
+      return res.status(401).json({ message: 'Invalid or expired token.' });
+    }
+
+    return res.status(503).json({
+      message: 'Unable to validate token from LMS decode service.',
+    });
   }
 };
 
