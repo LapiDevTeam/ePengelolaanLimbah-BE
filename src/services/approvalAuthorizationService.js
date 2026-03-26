@@ -23,7 +23,7 @@ const getExternalApprovals = async () => {
   }
   
   try {
-    const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
+    const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
     const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
     const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
     

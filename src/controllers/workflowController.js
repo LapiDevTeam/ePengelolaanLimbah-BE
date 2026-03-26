@@ -14,7 +14,7 @@ const {
 } = require('../models');
 
 const axios = require('axios');
-const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
+const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
 
 const { getUsersByCriteria, fetchUsersWithCache } = require('./userController');
 

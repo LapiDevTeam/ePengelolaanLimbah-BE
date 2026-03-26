@@ -28,7 +28,7 @@ const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
   try {
     // First try external API authorization
     const axios = require('axios');
-    const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
+    const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
     
     const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
     const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
@@ -1236,7 +1236,7 @@ const approvePermohonan = async (req, res) => {
         try {
           // Get approver's department from external API
           const axios = require('axios');
-          const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
+          const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
           const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
           const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
           const apjItems = items.filter(i => 
@@ -1281,7 +1281,7 @@ const approvePermohonan = async (req, res) => {
         let approverDept = null;
         try {
           const axios = require('axios');
-          const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
+          const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
           const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
           const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
           const userApprovals = items.filter(item => 
@@ -1313,7 +1313,7 @@ const approvePermohonan = async (req, res) => {
             const historyApproverId = history.approver_id || history.approver_id_delegated;
             try {
               const axios = require('axios');
-              const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
+              const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
               const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
               const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
               const historyApproverData = items.find(item => 
@@ -1371,7 +1371,7 @@ const approvePermohonan = async (req, res) => {
       let isHSEManagerStep = false;
       try {
         const axios = require('axios');
-        const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
+        const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
         const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
         const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
         const matches = items.filter(i => String(i.Appr_ID) === String(verifierId));

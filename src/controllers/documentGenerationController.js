@@ -23,7 +23,7 @@ const getInisialName = async (userId) => {
     if (!userId) return '';
     
     try {
-        const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL || 'http://192.168.1.38/api/global-dev/v1/custom/list-approval-magang';
+        const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
         const response = await axios.get(EXTERNAL_APPROVAL_URL);
         const items = Array.isArray(response.data) ? response.data : response.data?.data || [];
         
