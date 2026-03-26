@@ -2,6 +2,7 @@ const puppeteer = require("puppeteer");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const appPath = require("../config/path");
 
 class PrintController {
   /**
@@ -400,8 +401,8 @@ class PrintController {
         path.join(__dirname, "../../../../FE/ePemusnahanLimbah-FE/public/logo_bnw.png"),
         path.join(__dirname, "../../../ePemusnahanLimbah-FE/public/logo_bnw.png"),
         path.join(__dirname, "../../public/logo_bnw.png"),
-        "C:\\inetpub\\wwwroot\\ePemusnahanLimbah-dev\\logo_bnw.png",
-        path.join(__dirname, "../../../ePemusnahanLimbah-dev/logo_bnw.png"),
+        `C:\\inetpub\\wwwroot\\${appPath}\\logo_bnw.png`,
+        path.join(__dirname, `../../../${appPath}/logo_bnw.png`),
       ];
 
       let logoBase64 = "";
