@@ -81,8 +81,12 @@ class PrintController {
       // (the app uses sessionStorage/localStorage for tokens). This prevents
       // puppeteer from being redirected to the login page.
       const authHeader = req.headers.authorization || req.headers.Authorization || "";
-      const token =
-        authHeader && authHeader.toString().startsWith("Bearer ") ? authHeader.toString().slice(7) : authHeader;
+      let token = authHeader && authHeader.toString().startsWith("Bearer ") ? authHeader.toString().slice(7) : authHeader;
+
+      // Ambil token dari query params jika tidak ada di header (misal diakses lgsg lewat URL tab baru)
+      if (!token && req.query.token) {
+        token = req.query.token;
+      }
 
       if (!token) {
         console.warn("PrintController: No authorization token found in request headers");
@@ -430,8 +434,12 @@ class PrintController {
       // (the app uses sessionStorage/localStorage for tokens). This prevents
       // puppeteer from being redirected to the login page.
       const authHeader = req.headers.authorization || req.headers.Authorization || "";
-      const token =
-        authHeader && authHeader.toString().startsWith("Bearer ") ? authHeader.toString().slice(7) : authHeader;
+      let token = authHeader && authHeader.toString().startsWith("Bearer ") ? authHeader.toString().slice(7) : authHeader;
+
+      // Ambil token dari query params jika tidak ada di header (misal diakses lgsg lewat URL tab baru)
+      if (!token && req.query.token) {
+        token = req.query.token;
+      }
 
       if (token) {
         try {
