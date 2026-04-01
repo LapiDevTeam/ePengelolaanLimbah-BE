@@ -66,7 +66,9 @@ class PrintController {
           "--disable-accelerated-2d-canvas",
           "--no-first-run",
           "--no-zygote",
-          "--disable-gpu"
+          "--disable-gpu",
+          "--disable-web-security",
+          "--allow-running-insecure-content"
         ],
         // Use explicit temp directory to avoid Windows path issues
         userDataDir: path.join(os.tmpdir(), `puppeteer_${Date.now()}`)
@@ -116,28 +118,9 @@ class PrintController {
           }
         }, token);
 
-        // Also set Authorization header for subsequent resource requests
-        await page.setExtraHTTPHeaders({ Authorization: `Bearer ${token}` });
-
-        // Enable request interception to attach Authorization header for SPA XHR/fetch calls.
-        try {
-          await page.setRequestInterception(true);
-          page.on("request", (req) => {
-            try {
-              const headers = Object.assign({}, req.headers());
-              headers["Authorization"] = `Bearer ${token}`;
-              req.continue({ headers });
-            } catch (e) {
-              try {
-                req.continue();
-              } catch (__) {
-                /* noop */
-              }
-            }
-          });
-        } catch (e) {
-          console.warn("PrintController: unable to enable request interception:", e.message || e);
-        }
+        // Note: No need for setExtraHTTPHeaders or request interception for Authorization. 
+        // The SPA's axios interceptor will pick up the token from localStorage/sessionStorage.
+        // Adding Authorization to the main page navigation request can cause net::ERR_BLOCKED_BY_CLIENT.
 
         // Log partial token for debugging (do not log full token in production)
         try {
@@ -432,7 +415,9 @@ class PrintController {
           "--disable-accelerated-2d-canvas",
           "--no-first-run",
           "--no-zygote",
-          "--disable-gpu"
+          "--disable-gpu",
+          "--disable-web-security",
+          "--allow-running-insecure-content"
         ],
         // Use explicit temp directory to avoid Windows path issues
         userDataDir: path.join(os.tmpdir(), `puppeteer_${Date.now()}`)
@@ -473,28 +458,9 @@ class PrintController {
             }
           }, token);
 
-          // Also set Authorization header for subsequent resource requests
-          await page.setExtraHTTPHeaders({ Authorization: `Bearer ${token}` });
-
-          // Enable request interception to attach Authorization header for SPA XHR/fetch calls.
-          try {
-            await page.setRequestInterception(true);
-            page.on("request", (req) => {
-              try {
-                const headers = Object.assign({}, req.headers());
-                if (token) headers["Authorization"] = `Bearer ${token}`;
-                req.continue({ headers });
-              } catch (e) {
-                try {
-                  req.continue();
-                } catch (__) {
-                  /* noop */
-                }
-              }
-            });
-          } catch (e) {
-            console.warn("PrintController: unable to enable request interception:", e.message || e);
-          }
+          // Note: No need for setExtraHTTPHeaders or request interception for Authorization. 
+          // The SPA's axios interceptor will pick up the token from localStorage/sessionStorage.
+          // Adding Authorization to the main page navigation request can cause net::ERR_BLOCKED_BY_CLIENT.
 
           // Log partial token for debugging (do not log full token in production)
           try {
