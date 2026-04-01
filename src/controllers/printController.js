@@ -137,7 +137,15 @@ class PrintController {
         console.warn("Failed to set up authentication in puppeteer page:", e.message || e);
       }
 
-      console.log("PrintController: navigating to link:", link);
+      let targetLink = link;
+      // Auto-replace production domain to local IP because headless chrome inside the server
+      // often cannot resolve its own public domain due to NAT Loopback / Hairpinning
+      if (targetLink && targetLink.includes('web2.lapilabs.co.id')) {
+        targetLink = targetLink.replace('web2.lapilabs.co.id', '192.168.1.24');
+        console.log("PrintController: auto-replaced production domain to local IP ->", targetLink);
+      } else {
+        console.log("PrintController: navigating to link:", targetLink);
+      }
 
       // Capture console messages from the page
       page.on("console", (msg) => {
@@ -157,7 +165,7 @@ class PrintController {
       });
 
       // Navigate ke halaman print - add longer timeout and wait for auth
-      await page.goto(link, {
+      await page.goto(targetLink, {
         waitUntil: "networkidle0",
         timeout: 60000,
       });
@@ -482,7 +490,15 @@ class PrintController {
         }
       }
 
-      console.log("PrintController: navigating to link:", link);
+      let targetLink = link;
+      // Auto-replace production domain to local IP because headless chrome inside the server
+      // often cannot resolve its own public domain due to NAT Loopback / Hairpinning
+      if (targetLink && targetLink.includes('web2.lapilabs.co.id')) {
+        targetLink = targetLink.replace('web2.lapilabs.co.id', '192.168.1.24');
+        console.log("PrintController: auto-replaced production domain to local IP ->", targetLink);
+      } else {
+        console.log("PrintController: navigating to link:", targetLink);
+      }
 
       // Capture console messages from the page
       page.on("console", (msg) => {
@@ -502,7 +518,7 @@ class PrintController {
       });
 
       // Navigate ke halaman print - add longer timeout and wait for auth
-      await page.goto(link, {
+      await page.goto(targetLink, {
         waitUntil: "networkidle0",
         timeout: 60000,
       });
