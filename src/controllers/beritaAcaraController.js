@@ -209,13 +209,11 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
       baseWhereClause.bagian = bagianValue;
     }
 
-    // Container to store all available requests (InProgress at step 4 + Completed)
+    // Container to store all available requests (only 'Pembuatan BAP' status)
     let availableRequests = [];
 
     // Load completed requests with ApprovalHistory for Verifikasi Lapangan step
     let completedRequests;
-    // Also load in-progress requests waiting for HSE Manager (step_level 4)
-    let inProgressAtStep4 = [];
 
     // Determine date filtering: prefer startDate/endDate, fallback to tanggal
     let start = null;
@@ -239,47 +237,7 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
     if (hasDateFilter) {
       // If date filter is provided, we need to filter by approval date of "Verifikasi Lapangan" step
 
-      // First: Query InProgress requests at approval workflow step_level 4
-      inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
-        where: { ...baseWhereClause, status: "InProgress" },
-        include: [
-          { model: DetailLimbah },
-          {
-            model: GolonganLimbah,
-            ...(golonganNames && {
-              where: { nama: { [Op.in]: golonganNames } },
-              required: true,
-            }),
-          },
-          { model: JenisLimbahB3 },
-          {
-            model: ApprovalWorkflowStep,
-            as: "CurrentStep",
-            where: { step_level: 4 },
-            required: true,
-          },
-          {
-            model: ApprovalHistory,
-            include: [
-              {
-                model: ApprovalWorkflowStep,
-                where: {
-                  step_level: 3, // Verifikasi Lapangan is step_level 3
-                  step_name: "Verifikasi Lapangan",
-                },
-              },
-            ],
-            where: {
-              status: "Approved",
-              decision_date: { [Op.between]: [start, end] },
-            },
-            required: true, // INNER JOIN to ensure we only get requests with approved Verifikasi Lapangan on this date
-          },
-        ],
-        order: [["created_at", "DESC"]],
-      });
-
-      // Second: Query requests with status 'Pembuatan BAP' (ready for Berita Acara)
+      // Query requests with status 'Pembuatan BAP' (ready for Berita Acara)
       completedRequests = await PermohonanPemusnahanLimbah.findAll({
         where: { ...baseWhereClause, status: "Pembuatan BAP" },
         include: [
@@ -314,31 +272,8 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
       });
     } else {
       // If no date filter, load all available requests with ApprovalHistory (for consistent data structure)
-      
-      // First: Query InProgress requests at approval workflow step_level 4
-      inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
-        where: { ...baseWhereClause, status: "InProgress" },
-        include: [
-          { model: DetailLimbah },
-          {
-            model: GolonganLimbah,
-            ...(golonganNames && {
-              where: { nama: { [Op.in]: golonganNames } },
-              required: true,
-            }),
-          },
-          { model: JenisLimbahB3 },
-          {
-            model: ApprovalWorkflowStep,
-            as: "CurrentStep",
-            where: { step_level: 4 },
-            required: true,
-          },
-        ],
-        order: [["created_at", "DESC"]],
-      });
 
-      // Second: Query requests with status 'Pembuatan BAP' (ready for Berita Acara)
+      // Query requests with status 'Pembuatan BAP' (ready for Berita Acara)
       completedRequests = await PermohonanPemusnahanLimbah.findAll({
         where: { ...baseWhereClause, status: "Pembuatan BAP" },
         include: [
@@ -385,8 +320,7 @@ const getAvailableRequestsForDailyLog = async (req, res) => {
       }, {});
     }
 
-    // Push InProgress at step 4 first, then Completed requests into the container
-    availableRequests.push(...inProgressAtStep4);
+    // Only include requests with status 'Pembuatan BAP' (fully approved by HSE Manager)
     availableRequests.push(...completedRequests);
 
     // Use the combined container for mapping
@@ -579,32 +513,9 @@ const createBeritaAcara = async (req, res) => {
         .json({ message: "Invalid waktu format. Expected ISO datetime (e.g. 2025-09-26T15:09:52)." });
     }
 
-    // 1. Find selected completed requests that don't have a Berita Acara yet.
-    // Since selectedRequestIds is required, we only query for those specific IDs
-    let inProgressAtStep4 = [];
-    let completedRequests = [];
-
-    // First, check for requests that are in progress at step 4
-    inProgressAtStep4 = await PermohonanPemusnahanLimbah.findAll({
-      where: {
-        request_id: selectedRequestIds,
-        status: "InProgress",
-        berita_acara_id: null,
-      },
-      include: [
-        { model: GolonganLimbah },
-        { model: JenisLimbahB3 },
-        {
-          model: ApprovalWorkflowStep,
-          as: "CurrentStep",
-          where: { step_level: 4 },
-          required: true,
-        },
-      ],
-      transaction,
-    });
-    // Then, get selected requests with status 'Pembuatan BAP'
-    completedRequests = await PermohonanPemusnahanLimbah.findAll({
+    // 1. Find selected requests with status 'Pembuatan BAP' that don't have a Berita Acara yet.
+    // Only requests fully approved by HSE Manager (status = 'Pembuatan BAP') can be used.
+    let availableRequests = await PermohonanPemusnahanLimbah.findAll({
       where: {
         request_id: selectedRequestIds,
         status: "Pembuatan BAP",
@@ -613,9 +524,6 @@ const createBeritaAcara = async (req, res) => {
       include: [{ model: GolonganLimbah }, { model: JenisLimbahB3 }],
       transaction,
     });
-
-    // Combine all available requests
-    let availableRequests = [...inProgressAtStep4, ...completedRequests];
 
     if (availableRequests.length === 0) {
       await transaction.rollback();
