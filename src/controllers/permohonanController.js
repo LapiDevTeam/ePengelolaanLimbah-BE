@@ -956,7 +956,8 @@ const getPermohonanById = async (req, res) => {
         { model: DetailLimbah },
         { model: ApprovalWorkflowStep, as: 'CurrentStep', include: [ApprovalWorkflowApprover], required: false },
         { model: ApprovalHistory, required: false }
-      ]
+      ],
+      order: [[{ model: DetailLimbah }, 'detail_id', 'ASC']]
     });
 
     if (!permohonan) {
