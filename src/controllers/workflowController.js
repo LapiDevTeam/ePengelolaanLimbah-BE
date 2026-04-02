@@ -464,6 +464,8 @@ const getApprovalWorkflowByRequest = async (req, res) => {
                 if (String(stepKey) === '3') {
                     // Build four-role group: pelaksana_pemohon, supervisor_pemohon, pelaksana_hse, supervisor_hse
                     // Pemohon-side department is determined by requester's department
+                    // AD1 and AD2 are treated as the same group for pemohon verification roles
+                    const isADGroup = (d) => d === 'AD1' || d === 'AD2';
                     const selected = {
                         pelaksana_pemohon: null,
                         supervisor_pemohon: null,
@@ -490,7 +492,9 @@ const getApprovalWorkflowByRequest = async (req, res) => {
                             }
 
                             // Pemohon side: Appr_DeptID matches requester's department
-                            if (requesterDeptId && apprDept === String(requesterDeptId).toUpperCase()) {
+                            // Special case: AD1 and AD2 are treated as the same group
+                            const reqDeptUpper = requesterDeptId ? String(requesterDeptId).toUpperCase() : '';
+                            if (requesterDeptId && (apprDept === reqDeptUpper || (isADGroup(apprDept) && isADGroup(reqDeptUpper)))) {
                                 if (!selected.pelaksana_pemohon && jobLevel === 7) {
                                     selected.pelaksana_pemohon = { approver_id: a.Appr_ID, approver_name: a.emp_Name, approver_dept_id: a.Appr_DeptID, approver_cc: a.Appr_CC, approver_job_level: jobLevel };
                                 }

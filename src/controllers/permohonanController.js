@@ -114,13 +114,18 @@ const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
         // We'll accept any of: pelaksana (job_level 7) or supervisor/officer (5 or 6) from either HSE (KL) or the requester's dept
         const requestDepartment = permohonan.bagian || permohonan.requester_dept_id;
 
+        // AD1 and AD2 are treated as the same group for pemohon verification roles
+        const isADGroup = (d) => d === 'AD1' || d === 'AD2';
+
         const qualifies = userApprovals.some(a => {
           if (a.Appr_No !== 3) return false;
           const dept = (a.Appr_DeptID || '').toString().toUpperCase();
           // User can be HSE side if dept is KL
           const isHSE = dept === 'KL';
           // User can be Pemohon side if dept matches requester's department
-          const isPemohon = requestDepartment && dept === String(requestDepartment).toUpperCase();
+          // Special case: AD1 and AD2 are treated as the same group
+          const reqDeptUpper = requestDepartment ? String(requestDepartment).toUpperCase() : '';
+          const isPemohon = requestDepartment && (dept === reqDeptUpper || (isADGroup(dept) && isADGroup(reqDeptUpper)));
           // Note: HSE can also be pemohon if they submitted the request (bagian = KL)
           if (!isHSE && !isPemohon) return false;
           // job level info may not be present in external item; best-effort: treat Appr_CC or other hints as acceptable
