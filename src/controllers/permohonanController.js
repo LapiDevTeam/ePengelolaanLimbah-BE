@@ -1652,8 +1652,88 @@ const rejectPermohonan = async (req, res) => {
             permohonan.current_step_id = null;
             permohonan.status = 'Draft';
             permohonan.alasan_penolakan = alasan_penolakan;
+            await permohonan.save({ transaction });
+            await transaction.commit();
+            return res.status(200).json({
+                message: 'Request rejected and returned to draft for revision.',
+                data: permohonan
+            });
+        } else if (currentStepLevel === 3) {
+            // Verifikasi Lapangan rejection: permanently reject the original,
+            // then create a new draft pre-filled with the same data and rejection reason
+            // so the requester can revise without re-entering everything.
+            permohonan.current_step_id = null;
+            permohonan.status = 'Rejected';
+            permohonan.alasan_penolakan = alasan_penolakan;
+            await permohonan.save({ transaction });
+
+            // Load the original detail items
+            const originalDetails = await DetailLimbah.findAll({
+                where: { request_id: permohonan.request_id },
+                transaction
+            });
+
+            // Create a new draft from the rejected permohonan.
+            // Prefix alasan_penolakan with 'Reject Verifikasi - ' so the frontend
+            // can reliably distinguish this draft from a manager-returned draft.
+            const newDraft = await PermohonanPemusnahanLimbah.create({
+                bagian: permohonan.bagian,
+                bentuk_limbah: permohonan.bentuk_limbah,
+                golongan_limbah_id: permohonan.golongan_limbah_id,
+                jenis_limbah_b3_id: permohonan.jenis_limbah_b3_id,
+                is_produk_pangan: permohonan.is_produk_pangan,
+                approval_workflow_id: permohonan.approval_workflow_id,
+                current_step_id: null,
+                status: 'Draft',
+                alasan_penolakan: `Reject Verifikasi - ${alasan_penolakan}`,
+                requester_id: permohonan.requester_id,
+                requester_name: permohonan.requester_name,
+                requester_jabatan: permohonan.requester_jabatan,
+                requester_dept_id: permohonan.requester_dept_id,
+                requester_job_level_id: permohonan.requester_job_level_id,
+                requester_id_delegated: permohonan.requester_id_delegated,
+                requester_name_delegated: permohonan.requester_name_delegated,
+                requester_jabatan_delegated: permohonan.requester_jabatan_delegated,
+                requester_dept_id_delegated: permohonan.requester_dept_id_delegated,
+                requester_job_level_id_delegated: permohonan.requester_job_level_id_delegated,
+                jumlah_item: originalDetails.length,
+                // nomor_permohonan intentionally omitted – will be generated on re-submit
+            }, { transaction });
+
+            // Copy all detail limbah items to the new draft
+            if (originalDetails.length > 0) {
+                await DetailLimbah.bulkCreate(
+                    originalDetails.map(d => ({
+                        request_id: newDraft.request_id,
+                        nama_limbah: d.nama_limbah,
+                        nomor_analisa: d.nomor_analisa,
+                        nomor_referensi: d.nomor_referensi,
+                        nomor_wadah: d.nomor_wadah,
+                        jumlah_barang: d.jumlah_barang,
+                        satuan: d.satuan,
+                        bobot: d.bobot,
+                        alasan_pemusnahan: d.alasan_pemusnahan,
+                    })),
+                    { transaction }
+                );
+            }
+
+            // Audit log: record that the new draft was created from a rejected verifikasi lapangan
+            await logChanges(
+                req, 'ADD_ITEM', newDraft.request_id,
+                [{ field: 'request', old: null, new: `Draft baru dibuat dari permohonan #${permohonan.request_id} (ditolak saat Verifikasi Lapangan)` }],
+                transaction
+            );
+
+            await transaction.commit();
+
+            return res.status(200).json({
+                message: 'Permohonan ditolak saat Verifikasi Lapangan. Draft baru telah dibuat untuk revisi.',
+                data: permohonan,
+                newDraft: newDraft
+            });
         } else {
-            // HSE or higher level rejection: Final rejection
+            // HSE or other level rejection: Final rejection
             permohonan.current_step_id = null;
             permohonan.status = 'Rejected';
             permohonan.alasan_penolakan = alasan_penolakan;
@@ -1662,12 +1742,8 @@ const rejectPermohonan = async (req, res) => {
         await permohonan.save({ transaction });
 
         await transaction.commit();
-        
-        const message = currentStepLevel === 1 
-            ? 'Request rejected and returned to draft for revision.'
-            : 'Request has been permanently rejected.';
             
-        res.status(200).json({ message, data: permohonan });
+        res.status(200).json({ message: 'Request has been permanently rejected.', data: permohonan });
 
     } catch (error) {
         await transaction.rollback();
