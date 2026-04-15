@@ -442,7 +442,8 @@ const createBeritaAcara = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized: missing user identity" });
     }
 
-    // Authorization: only users that appear in external API as Appr_No=1 and Appr_DeptID='KL' (Supervisor/Officer HSE)
+    // Authorization: users that appear in external API as (Appr_No=1 OR Appr_No=2) and Appr_DeptID='KL'
+    // Appr_No=1: HSE Supervisor/Officer, Appr_No=2: HSE Manager
     try {
       const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
       const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
@@ -452,13 +453,13 @@ const createBeritaAcara = async (req, res) => {
       const creatorNik = user && (user.log_NIK || user.emp_NIK || user.log_nik);
       const creatorEntries = beritaItems.filter((it) => String(it.Appr_ID) === String(creatorNik));
       const isCreatorAllowed = creatorEntries.some(
-        (e) => Number(e.Appr_No) === 1 && String((e.Appr_DeptID || "").toUpperCase()) === "KL"
+        (e) => (Number(e.Appr_No) === 1 || Number(e.Appr_No) === 2) && String((e.Appr_DeptID || "").toUpperCase()) === "KL"
       );
       if (!isCreatorAllowed) {
         await transaction.rollback();
         return res
           .status(403)
-          .json({ message: "You are not authorized to create Berita Acara. Only HSE Supervisor/Officer may create." });
+          .json({ message: "You are not authorized to create Berita Acara. Only HSE Supervisor/Officer/Manager may create." });
       }
     } catch (err) {
       // If external API fails, deny by default for safety (could be changed to fallback DB allow list)
