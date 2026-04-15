@@ -21,7 +21,7 @@ const { Op } = require("sequelize");
 const Sequelize = require('sequelize');
 
 const jakartaTime = require("../utils/jakartaTime");
-const { getWorkflowNamesByGroup, getGolonganNamesByGroup } = require("../utils/golonganGroupMapping");
+const { getWorkflowNamesByGroup, getGolonganNamesByGroup, GOLONGAN_GROUP_MAP } = require("../utils/golonganGroupMapping");
 
 const { determineSigningWorkflow } = require("./workflowController");
 
@@ -442,8 +442,11 @@ const createBeritaAcara = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized: missing user identity" });
     }
 
-    // Authorization: users that appear in external API as (Appr_No=1 OR Appr_No=2) and Appr_DeptID='KL'
-    // Appr_No=1: HSE Supervisor/Officer, Appr_No=2: HSE Manager
+    // Authorization: users registered in external API for BAP creation:
+    //   - KL (Appr_No=1 Supervisor/Officer, Appr_No=2 Manager) → all groups
+    //   - QA (Appr_No=3) → allowed (group validation done after fetching requests)
+    //   - PN1 (Appr_No=3) → allowed (group validation done after fetching requests)
+    let creatorDeptFromApi = null; // Track which dept the creator is registered under
     try {
       const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
       const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
@@ -452,17 +455,29 @@ const createBeritaAcara = async (req, res) => {
       );
       const creatorNik = user && (user.log_NIK || user.emp_NIK || user.log_nik);
       const creatorEntries = beritaItems.filter((it) => String(it.Appr_ID) === String(creatorNik));
-      const isCreatorAllowed = creatorEntries.some(
+
+      // KL: Appr_No 1 or 2
+      const isKL = creatorEntries.some(
         (e) => (Number(e.Appr_No) === 1 || Number(e.Appr_No) === 2) && String((e.Appr_DeptID || "").toUpperCase()) === "KL"
       );
-      if (!isCreatorAllowed) {
+      // QA: Appr_No 3
+      const isQA = creatorEntries.some(
+        (e) => Number(e.Appr_No) === 3 && String((e.Appr_DeptID || "").toUpperCase()) === "QA"
+      );
+      // PN1: Appr_No 3
+      const isPN1 = creatorEntries.some(
+        (e) => Number(e.Appr_No) === 3 && String((e.Appr_DeptID || "").toUpperCase()) === "PN1"
+      );
+
+      if (!isKL && !isQA && !isPN1) {
         await transaction.rollback();
         return res
           .status(403)
-          .json({ message: "You are not authorized to create Berita Acara. Only HSE Supervisor/Officer/Manager may create." });
+          .json({ message: "You are not authorized to create Berita Acara. Only registered HSE (KL), QA, or PN1 staff may create." });
       }
+      creatorDeptFromApi = isKL ? "KL" : isQA ? "QA" : "PN1";
     } catch (err) {
-      // If external API fails, deny by default for safety (could be changed to fallback DB allow list)
+      // If external API fails, deny by default for safety
       console.warn("External approval API failed when checking Berita Acara creator:", err.message || err);
       await transaction.rollback();
       return res
@@ -529,6 +544,32 @@ const createBeritaAcara = async (req, res) => {
     if (availableRequests.length === 0) {
       await transaction.rollback();
       return res.status(404).json({ message: "No available requests found to generate a Berita Acara." });
+    }
+
+    // =========================================================================
+    // GROUP VALIDATION FOR QA / PN1 CREATORS
+    // =========================================================================
+    // KL can create BAP for any group. QA and PN1 are restricted:
+    //   - QA  → all selected requests must be from 'recall' golongan
+    //   - PN1 → all selected requests must be from 'recall-precursor' golongan
+    // =========================================================================
+    if (creatorDeptFromApi === "QA" || creatorDeptFromApi === "PN1") {
+      const allowedGolonganNames = creatorDeptFromApi === "QA"
+        ? (GOLONGAN_GROUP_MAP['recall'] || []).map(g => g.toLowerCase())
+        : (GOLONGAN_GROUP_MAP['recall-precursor'] || []).map(g => g.toLowerCase());
+
+      const allRequestsMatch = availableRequests.every(r => {
+        const golName = (r.GolonganLimbah?.golongan_name || '').toLowerCase();
+        return allowedGolonganNames.includes(golName);
+      });
+
+      if (!allRequestsMatch) {
+        const groupLabel = creatorDeptFromApi === "QA" ? "Recall" : "Precursor & OOT";
+        await transaction.rollback();
+        return res.status(403).json({
+          message: `${creatorDeptFromApi} staff can only create Berita Acara for ${groupLabel} requests.`
+        });
+      }
     }
 
     // =========================================================================
