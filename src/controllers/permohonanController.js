@@ -496,6 +496,17 @@ const getAllPermohonan = async (req, res) => {
       }
     }
 
+    // Include ApprovalHistory when querying verification items (step 3)
+    // so we can determine which VERIF_ROLEs have been approved per item
+    const isVerificationContext = isVerificationOnly || (statusFilterStepLevel === 3);
+    if (isVerificationContext) {
+      queryOptions.include.push({
+        model: ApprovalHistory,
+        required: false,
+        attributes: ['approver_jabatan', 'approver_id', 'approver_id_delegated', 'status', 'step_id']
+      });
+    }
+
     // Filter by bagian for non-KL users in all-permohonan tab
     // This supports QA/PN1 users who can see their bagian + additional golongan groups
     if ((filterByBagian === 'true' || filterByBagian === true) && userBagian) {
@@ -889,6 +900,33 @@ const getAllPermohonan = async (req, res) => {
       pendingStatuses.map(ps => [ps.requestId, { isPending: ps.isPending, canApprove: ps.canApprove }])
     );
     
+    // Pre-compute user's verification role info
+    // Uses auth user info (emp_DeptID, Job_LevelID) with external API dept as fallback
+    let userVerifInfo = null;
+    if (isVerificationContext) {
+      try {
+        // Primary source: authenticated user's emp_DeptID and Job_LevelID from token
+        let deptId = (filteringUser.emp_DeptID || '').toString().toUpperCase();
+        let jobLevel = parseInt(filteringUser.Job_LevelID || 0);
+
+        // Fallback: if dept/jobLevel missing from token, try external API
+        if (!deptId || !jobLevel) {
+          const userApprovals = await getUserApprovals(filteringUser.log_NIK);
+          const step3Approval = userApprovals.find(a => a.Appr_No === 3);
+          if (step3Approval) {
+            if (!deptId) deptId = (step3Approval.Appr_DeptID || '').toString().toUpperCase();
+            if (!jobLevel) jobLevel = parseInt(step3Approval.job_levelid || step3Approval.Job_LevelID || 0);
+          }
+        }
+
+        if (deptId) {
+          userVerifInfo = { deptId, jobLevel };
+        }
+      } catch (verifErr) {
+        console.warn('[getAllPermohonan] Failed to get user verification info:', verifErr.message);
+      }
+    }
+
     // Transform response: add golongan group and pending status
     const transformedList = filteredList.map(item => {
       const itemData = item.toJSON ? item.toJSON() : item;
@@ -913,6 +951,46 @@ const getAllPermohonan = async (req, res) => {
         requiredApprovals: itemData.CurrentStep?.required_approvals || 1
       };
       
+      // For verification items (step 3), add per-item verification role info
+      if (isVerificationContext && itemData.CurrentStep?.step_level === 3) {
+        // Extract which VERIF_ROLEs are approved from ApprovalHistory
+        const histories = (itemData.ApprovalHistories || []).filter(
+          h => h.status === 'Approved' && String(h.step_id) === String(itemData.current_step_id)
+        );
+        const approvedRoles = [];
+        histories.forEach(h => {
+          const m = (h.approver_jabatan || '').match(/VERIF_ROLE:(\d+)/);
+          if (m) approvedRoles.push(Number(m[1]));
+        });
+        itemData.verificationApprovedRoles = [...new Set(approvedRoles)];
+
+        // Compute user's eligible verification roles for this permohonan
+        if (userVerifInfo) {
+          const isADGroup = (d) => d === 'AD1' || d === 'AD2';
+          const pemohonDept = (itemData.bagian || '').toString().toUpperCase();
+          const userDept = userVerifInfo.deptId;
+          const jobLevel = userVerifInfo.jobLevel;
+          const eligibleRoles = [];
+
+          // HSE department users get HSE roles
+          if (userDept === 'KL') {
+            if (jobLevel === 7) eligibleRoles.push(3);
+            if (jobLevel === 5 || jobLevel === 6) eligibleRoles.push(4);
+          }
+          // Users from pemohon department get Pemohon roles
+          if (pemohonDept && (userDept === pemohonDept || (isADGroup(userDept) && isADGroup(pemohonDept)))) {
+            if (jobLevel === 7) eligibleRoles.push(1);
+            if (jobLevel === 5 || jobLevel === 6) eligibleRoles.push(2);
+          }
+          itemData.userVerificationRoles = eligibleRoles;
+        } else {
+          itemData.userVerificationRoles = [];
+        }
+      }
+
+      // Clean up ApprovalHistories from response to reduce payload
+      delete itemData.ApprovalHistories;
+
       // Transform DetailLimbahs - keep only required fields
       if (itemData.DetailLimbahs && Array.isArray(itemData.DetailLimbahs)) {
         itemData.DetailLimbahs = itemData.DetailLimbahs.map(detail => ({
