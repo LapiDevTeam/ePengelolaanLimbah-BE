@@ -1261,33 +1261,100 @@ const approvePermohonan = async (req, res) => {
         });
       }
   
-      // 3. Generate nomor_permohonan if this is the first approval step (Department Manager)
+      // 3. Generate nomor_permohonan
+      // - For Precursor/OOT (pure): generate after APJ approval (step_level === 2)
+      // - For Recall & Prekursor: generate after ALL required APJ roles (PN + QA) have approved at step_level === 2
+      // - For other requests: generate after Department Manager approval (step_level === 1)
       let nomorPermohonan = permohonan.nomor_permohonan;
-      if (permohonan.CurrentStep.step_level === 1 && !nomorPermohonan) {
+      if (!nomorPermohonan) {
+        // Determine golongan category for this request
+        let isPrecursorForNomor = false;
+        let isRecallPrecursorForNomor = false;
         try {
-          nomorPermohonan = await generateNomorPermohonan(permohonan.bentuk_limbah, transaction);
-          permohonan.nomor_permohonan = nomorPermohonan;
-          
-          // Log the nomor_permohonan generation
-          await logChanges(
-            req, 'UPDATE', permohonan.request_id,
-            [{ field: 'nomor_permohonan', old: null, new: nomorPermohonan }],
+          const golonganForNomor = await GolonganLimbah.findByPk(permohonan.golongan_limbah_id, { transaction });
+          const catNameForNomor = (golonganForNomor && golonganForNomor.nama) ? String(golonganForNomor.nama).toLowerCase() : '';
+          isPrecursorForNomor = catNameForNomor.includes('prekursor') || catNameForNomor.includes('oot');
+          isRecallPrecursorForNomor = catNameForNomor.includes('recall') && catNameForNomor.includes('prekursor');
+        } catch (gErr) {
+          console.warn('[approvePermohonan] Failed to check golongan for nomor generation:', gErr && gErr.message);
+        }
+
+        let shouldGenerateNomor = false;
+
+        if (isRecallPrecursorForNomor && permohonan.CurrentStep.step_level === 2) {
+          // Recall & Prekursor: only generate after BOTH APJ PN and APJ QA have approved
+          // Check existing approvals + determine current approver's APJ role
+          const existingApprovals = await ApprovalHistory.findAll({
+            where: {
+              request_id: permohonan.request_id,
+              step_id: permohonan.current_step_id,
+              status: 'Approved'
+            },
             transaction
-          );
-        } catch (nomorError) {
-          await transaction.rollback();
-          console.error("Failed to generate nomor_permohonan:", nomorError);
-          console.error("Permohonan data:", JSON.stringify(permohonan.toJSON(), null, 2));
-          
-          // Handle race condition - ask user to resubmit
-          if (nomorError.message.includes('limit exceeded') || nomorError.message.includes('already exists')) {
-            return res.status(409).json({ 
-              message: 'Unable to generate request number due to system constraints. Please cancel this request and resubmit.',
-              error: 'REQUEST_NUMBER_CONFLICT'
-            });
+          });
+          const approvedRolesSet = new Set();
+          existingApprovals.forEach(h => {
+            const jab = h.approver_jabatan || '';
+            const m = jab.match(/APJ_ROLE:(\w+)/);
+            if (m && m[1]) approvedRolesSet.add(m[1]);
+          });
+
+          // Determine the current approver's APJ role (this approval hasn't been recorded yet)
+          try {
+            const axios = require('axios');
+            const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
+            const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
+            const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
+            const apjItems = items.filter(i =>
+              String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah' &&
+              Number(i.Appr_No) === 2
+            );
+            const userApj = apjItems.find(item => String(item.Appr_ID) === String(verifierId));
+            if (userApj && userApj.Appr_DeptID) {
+              const dept = String(userApj.Appr_DeptID).toUpperCase();
+              if (dept === 'PN1') approvedRolesSet.add('PN');
+              else if (dept === 'QA') approvedRolesSet.add('QA');
+            }
+          } catch (extErr) {
+            console.warn('[approvePermohonan] Failed to get current APJ role for nomor generation:', extErr.message);
           }
-          
-          return res.status(500).json({ message: "Error generating request number", error: nomorError.message });
+
+          // Both PN and QA must be present (existing + current) to generate nomor
+          shouldGenerateNomor = approvedRolesSet.has('PN') && approvedRolesSet.has('QA');
+        } else if (isPrecursorForNomor) {
+          // Pure Precursor/OOT: generate after any APJ approve (step_level 2)
+          shouldGenerateNomor = permohonan.CurrentStep.step_level === 2;
+        } else {
+          // Standard / Recall: generate after Dept Manager approve (step_level 1)
+          shouldGenerateNomor = permohonan.CurrentStep.step_level === 1;
+        }
+
+        if (shouldGenerateNomor) {
+          try {
+            nomorPermohonan = await generateNomorPermohonan(permohonan.bentuk_limbah, transaction);
+            permohonan.nomor_permohonan = nomorPermohonan;
+            
+            // Log the nomor_permohonan generation
+            await logChanges(
+              req, 'UPDATE', permohonan.request_id,
+              [{ field: 'nomor_permohonan', old: null, new: nomorPermohonan }],
+              transaction
+            );
+          } catch (nomorError) {
+            await transaction.rollback();
+            console.error("Failed to generate nomor_permohonan:", nomorError);
+            console.error("Permohonan data:", JSON.stringify(permohonan.toJSON(), null, 2));
+            
+            // Handle race condition - ask user to resubmit
+            if (nomorError.message.includes('limit exceeded') || nomorError.message.includes('already exists')) {
+              return res.status(409).json({ 
+                message: 'Unable to generate request number due to system constraints. Please cancel this request and resubmit.',
+                error: 'REQUEST_NUMBER_CONFLICT'
+              });
+            }
+            
+            return res.status(500).json({ message: "Error generating request number", error: nomorError.message });
+          }
         }
       }
 
