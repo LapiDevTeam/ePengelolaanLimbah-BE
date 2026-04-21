@@ -24,6 +24,7 @@ const jakartaTime = require("../utils/jakartaTime");
 const { getWorkflowNamesByGroup, getGolonganNamesByGroup, GOLONGAN_GROUP_MAP } = require("../utils/golonganGroupMapping");
 
 const { determineSigningWorkflow } = require("./workflowController");
+const { sendBapSigningNotification } = require("../utils/emailService");
 
 // --- Helper Function for External API Authorization ---
 // This is consistent with checkApprovalAuthorization in permohonanController but adapted for signing workflow
@@ -1792,6 +1793,35 @@ const signBeritaAcara = async (req, res) => {
     }
 
     await transaction.commit();
+
+    // --- Email notification to next signer(s) (fire-and-forget) ---
+    // Only send when step advanced to step 3 (APJ) or step 4 (Head of Plant)
+    try {
+      const completedStepLevel = currentStep ? currentStep.step_level : null;
+      const completedStepName = currentStep ? (currentStep.step_name || `Step ${completedStepLevel}`) : 'Unknown';
+
+      // Determine if we just advanced to a new step
+      if (completedSignatures >= requiredSignatures && event.current_signing_step_id) {
+        // Fetch the next step info to get step_level and step_name
+        const nextStepInfo = await SigningWorkflowStep.findByPk(event.current_signing_step_id);
+        const nextStepLevel = nextStepInfo ? nextStepInfo.step_level : null;
+        const nextStepName = nextStepInfo ? (nextStepInfo.step_name || `Step ${nextStepLevel}`) : 'Next Step';
+
+        // Send email for step 3 and step 4
+        if (nextStepLevel === 3 || nextStepLevel === 4) {
+          sendBapSigningNotification({
+            beritaAcara: event,
+            nextStepLevel,
+            nextStepName,
+            currentSignerName: authorizingUser.Nama || authorizingUser.log_NIK,
+            currentStepName: completedStepName,
+          });
+        }
+      }
+    } catch (emailErr) {
+      // Non-fatal: email failure should never affect BAP signing
+      console.error('[signBeritaAcara] Email notification error (non-fatal):', emailErr.message);
+    }
 
     // Reload the event from DB so we return the latest persisted status/fields
     const refreshedEvent = await BeritaAcara.findByPk(event.berita_acara_id, {
