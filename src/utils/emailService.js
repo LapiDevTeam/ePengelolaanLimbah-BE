@@ -5,7 +5,7 @@ const nodemailer = require('nodemailer');
 // Toggle TEST_MODE to switch between hardcoded test email
 // and real recipient emails from user API
 // ============================================================
-const TEST_MODE = true; // true = kirim ke TEST_EMAIL, false = kirim ke email dari user API
+const TEST_MODE = false; // true = kirim ke TEST_EMAIL, false = kirim ke email dari user API
 const TEST_EMAIL = 'thehascine@gmail.com'; // Ganti dengan email kamu untuk testing
 
 // Create reusable transporter
