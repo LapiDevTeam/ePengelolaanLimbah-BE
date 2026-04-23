@@ -438,14 +438,19 @@ exports.getDashboardStats = async (req, res) => {
             console.error('[getDashboardStats] Error checking Pembuatan BAP requests:', bapError.message);
         }
 
-        // 7. Count "Rejected (KL)" - requests with status Rejected
+        // 7. Count "Rejected (KL)" - requests with status Rejected in the last 30 days
         let rejectedKLCount = 0;
         const rejectedKLByGroup = initGroupBreakdown();
+        const REJECTED_DAYS_WINDOW = 7;
         
         try {
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - REJECTED_DAYS_WINDOW);
+
             const rejectedRequests = await PermohonanPemusnahanLimbah.findAll({
                 where: {
-                    status: 'Rejected'
+                    status: 'Rejected',
+                    updated_at: { [Op.gte]: thirtyDaysAgo }
                 },
                 include: [
                     {
@@ -455,10 +460,31 @@ exports.getDashboardStats = async (req, res) => {
                 ]
             });
 
-            rejectedKLCount = rejectedRequests.length;
+            // Filter by user scope (same logic as verifikasiLapangan and pembuatanBAP)
+            const filteredRejectedRequests = rejectedRequests.filter(request => {
+                const golonganName = request.GolonganLimbah?.nama;
+                const group = determineGroupFromGolongan(golonganName);
+                const normalizedRequestBagian = request.bagian ? String(request.bagian).toUpperCase() : null;
+
+                if (userScope.scope === 'all') return true;
+
+                if (userScope.scope === 'bagian_plus_group') {
+                    if (normalizedRequestBagian === normalizedUserBagian) return true;
+                    if (userScope.additionalGroups.includes(group)) return true;
+                    return false;
+                }
+
+                if (userScope.scope === 'own') {
+                    return normalizedRequestBagian === normalizedUserBagian;
+                }
+
+                return false;
+            });
+
+            rejectedKLCount = filteredRejectedRequests.length;
 
             // Group by golongan
-            for (const request of rejectedRequests) {
+            for (const request of filteredRejectedRequests) {
                 const golonganName = request.GolonganLimbah?.nama;
                 const group = determineGroupFromGolongan(golonganName);
                 if (group && rejectedKLByGroup.hasOwnProperty(group)) {
@@ -494,6 +520,7 @@ exports.getDashboardStats = async (req, res) => {
                 pembuatanBAPByGroup: pembuatanBAPByGroup,
                 rejectedKL: rejectedKLCount,
                 rejectedKLByGroup: rejectedKLByGroup,
+                rejectedKLDaysWindow: REJECTED_DAYS_WINDOW,
                 // Legacy fields for backward compatibility
                 myRequestsCount,
                 pendingApprovalsCount,
