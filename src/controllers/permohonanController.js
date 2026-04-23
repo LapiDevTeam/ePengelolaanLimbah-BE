@@ -20,6 +20,7 @@ const {
     checkUserCanApproveRequest, 
     hasUserProcessedCurrentStep 
 } = require('../services/approvalAuthorizationService');
+const { sendApprovalStep2Notification } = require('../utils/emailService');
 
 // --- Helper Function for External API Authorization ---
 const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
@@ -1689,6 +1690,25 @@ const approvePermohonan = async (req, res) => {
       
       // If everything succeeded, commit the changes
       await transaction.commit();
+
+      // --- Email notification to step 2 (APJ) approvers (fire-and-forget) ---
+      // Only send when step 1 (Manager) just completed and advanced to step 2 (APJ)
+      try {
+        const previousStepLevel = permohonan.CurrentStep ? permohonan.CurrentStep.step_level : null;
+        const didAdvanceToStep2 = previousStepLevel === 1 && nextStep && nextStep.step_level === 2 && permohonan.current_step_id === nextStep.step_id;
+        if (didAdvanceToStep2) {
+          sendApprovalStep2Notification({
+            permohonan,
+            categoryName,
+            golonganName: golongan ? golongan.nama : '',
+            isProdukPangan: permohonan.is_produk_pangan === true,
+            managerApproverName: req.body.verifierName || user.Nama || verifierId,
+          });
+        }
+      } catch (emailErr) {
+        // Non-fatal: email failure should never affect approval
+        console.error('[approvePermohonan] Email notification error (non-fatal):', emailErr.message);
+      }
   
       res.status(200).json({
         message: `Request approved. ${nextStep ? 'Advanced to next step.' : 'Approval workflow complete.'}`,

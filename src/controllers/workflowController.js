@@ -417,43 +417,38 @@ const getApprovalWorkflowByRequest = async (req, res) => {
 
                     if (requiredDepts.length > 0) {
                         const apjMatches = rawApprovers.filter(a => 
-                            String(a.Appr_CC || '').toUpperCase() === 'APJ' && 
+                            String(a.Appr_CC || '').trim().toUpperCase() === 'APJ' && 
                             requiredDepts.includes(String(a.Appr_DeptID || '').toUpperCase())
                         );
-                        if (apjMatches.length > 0) {
-                            filteredApprovers = apjMatches;
-                        } else {
-                            // Fallback: create synthetic approvers for required departments
-                            // This handles cases where external API doesn't have the expected data structure
-                            filteredApprovers = requiredDepts.map(dept => {
-                                if (dept === 'PC') {
-                                    // Create synthetic PJKPO approver
-                                    return {
-                                        Appr_ID: 'PJKPO',
-                                        emp_Name: 'PJKPO',
-                                        Appr_DeptID: 'PC',
-                                        Appr_CC: 'APJ'
-                                    };
-                                } else if (dept === 'QA') {
-                                    // Create synthetic APJ QA approver
-                                    return {
-                                        Appr_ID: 'APJ_QA',
-                                        emp_Name: 'APJ QA',
-                                        Appr_DeptID: 'QA',
-                                        Appr_CC: 'APJ'
-                                    };
-                                } else if (dept === 'PN1') {
-                                    // Create synthetic APJ PN approver
-                                    return {
-                                        Appr_ID: 'APJ_PN',
-                                        emp_Name: 'APJ PN',
-                                        Appr_DeptID: 'PN1',
-                                        Appr_CC: 'APJ'
-                                    };
-                                }
-                                return null;
-                            }).filter(Boolean);
-                        }
+                        // Per-department fallback: for each required dept, use the real external API
+                        // match if found, otherwise create a synthetic placeholder.
+                        // This fixes the all-or-nothing bug where if QA is found but PC is not,
+                        // PJKPO would be silently dropped because apjMatches.length > 0.
+                        filteredApprovers = requiredDepts.map(dept => {
+                            // 1. Try strict match (Appr_CC === 'APJ' + dept)
+                            const deptMatch = apjMatches.find(a =>
+                                String(a.Appr_DeptID || '').toUpperCase() === dept
+                            );
+                            if (deptMatch) return deptMatch;
+
+                            // 2. Try looser match from rawApprovers without Appr_CC filter
+                            //    (handles cases where Appr_CC has whitespace or unexpected value)
+                            const rawDeptMatch = rawApprovers.find(a =>
+                                String(a.Appr_DeptID || '').toUpperCase() === dept
+                            );
+                            if (rawDeptMatch) return { ...rawDeptMatch, Appr_CC: 'APJ' };
+
+                            // 3. Synthetic fallback — enrich name from userMap if available
+                            if (dept === 'PC') {
+                                const userData = userMap['PJKPO'];
+                                return { Appr_ID: 'PJKPO', emp_Name: userData?.emp_Name || 'PJKPO', Appr_DeptID: 'PC', Appr_CC: 'APJ' };
+                            } else if (dept === 'QA') {
+                                return { Appr_ID: 'APJ_QA', emp_Name: 'APJ QA', Appr_DeptID: 'QA', Appr_CC: 'APJ' };
+                            } else if (dept === 'PN1') {
+                                return { Appr_ID: 'APJ_PN', emp_Name: 'APJ PN', Appr_DeptID: 'PN1', Appr_CC: 'APJ' };
+                            }
+                            return null;
+                        }).filter(Boolean);
                     } else {
                         // For other categories without special requirements, skip APJ step entirely
                         return null;
@@ -1003,42 +998,22 @@ const getSigningWorkflowByRequest = async (req, res) => {
                         const matches = rawSigners.filter(a => 
                             requiredDepts.includes(String(a.Appr_DeptID || '').toUpperCase())
                         );
-                        if (matches.length > 0) {
-                            filteredSigners = matches;
-                        } else {
-                            // Fallback: create synthetic signers for required departments
-                            filteredSigners = requiredDepts.map(dept => {
-                                if (dept === 'PC') {
-                                    return {
-                                        Appr_ID: 'PJKPO',
-                                        emp_Name: 'PJKPO',
-                                        Appr_DeptID: 'PC',
-                                        Appr_CC: 'APJ'
-                                    };
-                                } else if (dept === 'QA') {
-                                    return {
-                                        Appr_ID: 'APJ_QA',
-                                        emp_Name: 'APJ QA',
-                                        Appr_DeptID: 'QA',
-                                        Appr_CC: 'APJ'
-                                    };
-                                } else if (dept === 'PN1') {
-                                    return {
-                                        Appr_ID: 'APJ_PN',
-                                        emp_Name: 'APJ PN',
-                                        Appr_DeptID: 'PN1',
-                                        Appr_CC: 'APJ'
-                                    };
-                                } else {
-                                    return {
-                                        Appr_ID: 'DEPT_MGR',
-                                        emp_Name: 'Department Manager',
-                                        Appr_DeptID: dept,
-                                        Appr_CC: 'Manager'
-                                    };
-                                }
-                            }).filter(Boolean);
-                        }
+                        // Per-department fallback: same fix as approval workflow above
+                        filteredSigners = requiredDepts.map(dept => {
+                            const deptMatch = matches.find(a =>
+                                String(a.Appr_DeptID || '').toUpperCase() === dept
+                            );
+                            if (deptMatch) return deptMatch;
+                            if (dept === 'PC') {
+                                return { Appr_ID: 'PJKPO', emp_Name: 'PJKPO', Appr_DeptID: 'PC', Appr_CC: 'APJ' };
+                            } else if (dept === 'QA') {
+                                return { Appr_ID: 'APJ_QA', emp_Name: 'APJ QA', Appr_DeptID: 'QA', Appr_CC: 'APJ' };
+                            } else if (dept === 'PN1') {
+                                return { Appr_ID: 'APJ_PN', emp_Name: 'APJ PN', Appr_DeptID: 'PN1', Appr_CC: 'APJ' };
+                            } else {
+                                return { Appr_ID: 'DEPT_MGR', emp_Name: 'Department Manager', Appr_DeptID: dept, Appr_CC: 'Manager' };
+                            }
+                        }).filter(Boolean);
                     } else {
                         // Skip this step if no requirements
                         return null;
