@@ -375,7 +375,12 @@ const getBeritaAcaraDataForDoc = async (req, res) => {
         
 
         // --- Create a detailed list for each linked Permohonan ---
-        const permohonan_list = (beritaAcara.PermohonanPemusnahanLimbahs || []).map(p => {
+        const sortedPermohonanList = (beritaAcara.PermohonanPemusnahanLimbahs || []).slice().sort((a, b) => {
+            const numA = parseInt((a.nomor_permohonan || '').substring(0, 5)) || 0;
+            const numB = parseInt((b.nomor_permohonan || '').substring(0, 5)) || 0;
+            return numA - numB;
+        });
+        const permohonan_list = sortedPermohonanList.map(p => {
             const detailLimbah = p.DetailLimbahs || [];
             const golonganNama = p.GolonganLimbah?.nama || 'N/A';
             
@@ -793,6 +798,13 @@ const generateLogbookExcel = async (req, res) => {
                 const decisionDate = new Date(approval.decision_date);
                 return decisionDate >= startDate && decisionDate <= endDate;
             });
+        });
+
+        // --- Sort permohonan by first 5 digits of nomor_permohonan (ascending) ---
+        permohonanData.sort((a, b) => {
+            const numA = parseInt((a.nomor_permohonan || '').substring(0, 5)) || 0;
+            const numB = parseInt((b.nomor_permohonan || '').substring(0, 5)) || 0;
+            return numA - numB;
         });
 
         // --- Helper function to get verification date ---
