@@ -513,11 +513,18 @@ const getAllPermohonan = async (req, res) => {
     if ((filterByBagian === 'true' || filterByBagian === true) && userBagian) {
       // Normalize userBagian for case-insensitive comparison
       const normalizedUserBagian = String(userBagian).toUpperCase();
+      // AD1 and AD2 share data - both see each other's requests
+      const isADDept = normalizedUserBagian === 'AD1' || normalizedUserBagian === 'AD2';
       
-      // Use Sequelize.fn for case-insensitive bagian comparison
-      const bagianConditions = [
-        Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), normalizedUserBagian)
-      ];
+      // Initial bagian conditions: for AD group include both AD1 and AD2
+      const bagianConditions = isADDept
+        ? [
+            Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), 'AD1'),
+            Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), 'AD2')
+          ]
+        : [
+            Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), normalizedUserBagian)
+          ];
       
       // Add additional golongan groups (for QA: recall, for PN1: recall-precursor)
       if (additionalGroups) {
@@ -570,10 +577,17 @@ const getAllPermohonan = async (req, res) => {
     // Filter by user's department (Dept. Requests tab)
     if ((deptOnly === 'true' || deptOnly === true) && userDept) {
       const normalizedUserDept = String(userDept).toUpperCase();
-      const deptCondition = Sequelize.where(
-        Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')),
-        normalizedUserDept
-      );
+      // AD1 and AD2 share data - both see each other's requests
+      const isADDept = normalizedUserDept === 'AD1' || normalizedUserDept === 'AD2';
+      const deptCondition = isADDept
+        ? { [Op.or]: [
+            Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), 'AD1'),
+            Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), 'AD2')
+          ] }
+        : Sequelize.where(
+            Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')),
+            normalizedUserDept
+          );
 
       if (hasWhereConditions(queryOptions.where)) {
         queryOptions.where = {

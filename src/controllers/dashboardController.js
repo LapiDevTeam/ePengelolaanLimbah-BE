@@ -17,6 +17,7 @@ const { determineGroupFromGolongan } = require('../utils/golonganGroupMapping');
 const KL_DEPARTMENT_ID = 'KL';
 const QA_DEPARTMENT_ID = 'QA';
 const PN1_DEPARTMENT_ID = 'PN1';
+const AD_DEPT_IDS = ['AD1', 'AD2'];
 const DAFTAR_AJUAN_APPROVAL_ROLES = ['Manager', 'HSE', 'APJ'];
 const SPECIAL_USER_IDS = { PJKPO: 'PJKPO' };
 
@@ -62,6 +63,11 @@ const getUserDataScope = (user) => {
         return { scope: 'bagian_plus_group', filterByBagian: true, additionalGroups: [GOLONGAN_GROUPS.RECALL_PRECURSOR] };
     }
     
+    // AD1 and AD2 share data - both can see each other's requests
+    if (AD_DEPT_IDS.includes(deptId)) {
+        return { scope: 'ad_group', filterByBagian: true, additionalGroups: [], additionalDepts: AD_DEPT_IDS };
+    }
+    
     // Regular users can only see data from their own department (bagian)
     return { scope: 'own', filterByBagian: true, additionalGroups: [] };
 };
@@ -104,8 +110,15 @@ exports.getDashboardStats = async (req, res) => {
         
         try {
             if (userBagian) {
+                // AD1 and AD2 share data - include both departments for AD group users
+                const normalizedBagian = String(userBagian).toUpperCase();
+                const isADUser = AD_DEPT_IDS.includes(normalizedBagian);
+                const bagianFilter = isADUser
+                    ? { bagian: { [Op.in]: AD_DEPT_IDS } }
+                    : { bagian: userBagian };
+
                 const deptRequests = await PermohonanPemusnahanLimbah.findAll({
-                    where: { bagian: userBagian },
+                    where: bagianFilter,
                     include: [
                         {
                             model: GolonganLimbah,
@@ -352,6 +365,11 @@ exports.getDashboardStats = async (req, res) => {
                     return false;
                 }
                 
+                // scope 'ad_group' - AD1 and AD2 share data
+                if (userScope.scope === 'ad_group') {
+                    return userScope.additionalDepts.includes(normalizedRequestBagian);
+                }
+                
                 // scope 'own' - only user's bagian
                 if (userScope.scope === 'own') {
                     return normalizedRequestBagian === normalizedUserBagian;
@@ -416,6 +434,11 @@ exports.getDashboardStats = async (req, res) => {
                     return false;
                 }
                 
+                // scope 'ad_group' - AD1 and AD2 share data
+                if (userScope.scope === 'ad_group') {
+                    return userScope.additionalDepts.includes(normalizedRequestBagian);
+                }
+                
                 // scope 'own' - only user's bagian
                 if (userScope.scope === 'own') {
                     return normalizedRequestBagian === normalizedUserBagian;
@@ -472,6 +495,10 @@ exports.getDashboardStats = async (req, res) => {
                     if (normalizedRequestBagian === normalizedUserBagian) return true;
                     if (userScope.additionalGroups.includes(group)) return true;
                     return false;
+                }
+
+                if (userScope.scope === 'ad_group') {
+                    return userScope.additionalDepts.includes(normalizedRequestBagian);
                 }
 
                 if (userScope.scope === 'own') {
