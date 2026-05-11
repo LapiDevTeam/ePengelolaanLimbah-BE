@@ -1864,7 +1864,7 @@ const rejectPermohonan = async (req, res) => {
                 approval_workflow_id: permohonan.approval_workflow_id,
                 current_step_id: null,
                 status: 'Draft',
-                alasan_penolakan: `Reject Verifikasi - ${alasan_penolakan}`,
+                alasan_penolakan: `Reject Verifikasi - ${permohonan.nomorPermohonan}, ${alasan_penolakan}`,
                 requester_id: permohonan.requester_id,
                 requester_name: permohonan.requester_name,
                 requester_jabatan: permohonan.requester_jabatan,
