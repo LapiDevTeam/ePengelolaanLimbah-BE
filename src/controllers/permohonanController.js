@@ -1,45 +1,45 @@
 const Sequelize = require('sequelize');
 const Op = Sequelize.Op;
 const {
-    PermohonanPemusnahanLimbah,
-    DetailLimbah,
-    ApprovalWorkflowStep,
-    ApprovalWorkflowApprover,
-    GolonganLimbah,
-    JenisLimbahB3,
-    ApprovalHistory,
-    AuditLog,
-    BeritaAcara,
-    sequelize
+  PermohonanPemusnahanLimbah,
+  DetailLimbah,
+  ApprovalWorkflowStep,
+  ApprovalWorkflowApprover,
+  GolonganLimbah,
+  JenisLimbahB3,
+  ApprovalHistory,
+  AuditLog,
+  BeritaAcara,
+  sequelize
 } = require('../models');
 
 const { determineApprovalWorkflow } = require('./workflowController');
 const { generateNomorPermohonan } = require('../utils/nomorPermohonanGenerator');
 const { getGolonganNamesByGroup, determineGroupFromGolongan } = require('../utils/golonganGroupMapping');
-const { 
-    checkUserCanApproveRequest, 
-    hasUserProcessedCurrentStep 
+const {
+  checkUserCanApproveRequest,
+  hasUserProcessedCurrentStep
 } = require('../services/approvalAuthorizationService');
 const { sendApprovalStep2Notification } = require('../utils/emailService');
 
 // --- Helper Function for External API Authorization ---
 const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
   let isAuthorized = false;
-  
+
   try {
     // First try external API authorization
     const axios = require('axios');
     const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
-    
+
     const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
     const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
-    
+
     // Filter for ePengelolaan_Limbah approvers
     const appItems = items.filter(i => String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah');
-    
+
     // Find user's approval capabilities
     const userApprovals = appItems.filter(item => item.Appr_ID === authorizingUser.log_NIK);
-    
+
     // Check if user can approve this step level
     const currentStepLevel = permohonan.CurrentStep?.step_level;
 
@@ -57,8 +57,8 @@ const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
         const requestDepartment = (permohonan.bagian || permohonan.requester_dept_id || '').toString().toUpperCase();
         isAuthorized = userDepartments.includes(requestDepartment);
 
-      // APJ (step 2) requires department-based approval depending on golongan (e.g. Prekursor/OOT -> PN1, Recall -> QA)
-      // Additionally, for isProdukPangan requests, APJ PC (PJKPO) is also required
+        // APJ (step 2) requires department-based approval depending on golongan (e.g. Prekursor/OOT -> PN1, Recall -> QA)
+        // Additionally, for isProdukPangan requests, APJ PC (PJKPO) is also required
       } else if (currentStepLevel === 2) {
         // Determine required approver department from golongan
         let requiredDept = null;
@@ -97,7 +97,7 @@ const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
           const userDeptForStep = userApprovals
             .filter(a => a.Appr_No === 2)
             .map(a => (a.Appr_DeptID || '').toString().toUpperCase());
-          
+
           if (Array.isArray(requiredDept)) {
             // For array of required departments, user must belong to at least one
             isAuthorized = requiredDept.some(dept => userDeptForStep.includes(dept.toString().toUpperCase()));
@@ -134,7 +134,7 @@ const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
           const jobLevel = a.Appr_JobLevel || a.emp_JobLevel || null;
           if (!jobLevel) return true; // cannot determine, allow based on department membership
           const jl = Number(jobLevel);
-          return jl === 7 || jl === 6 || jl === 5;
+          return jl === 7 || jl === 6 || jl === 5 || jl === 4;
         });
 
         isAuthorized = !!qualifies;
@@ -143,51 +143,51 @@ const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
         isAuthorized = true;
       }
     }
-    
+
   } catch (apiError) {
     console.warn('[checkApprovalAuthorization] External API authorization failed, falling back to database:', apiError.message);
-    
+
     // Fallback to original database check
     if (permohonan.CurrentStep?.ApprovalWorkflowApprovers) {
       isAuthorized = permohonan.CurrentStep.ApprovalWorkflowApprovers.some(
-        approver => approver.approver_id === authorizingUser.log_NIK || 
-                   approver.approver_identity === authorizingUser.log_NIK
+        approver => approver.approver_id === authorizingUser.log_NIK ||
+          approver.approver_identity === authorizingUser.log_NIK
       );
     }
   }
-  
+
   return isAuthorized;
 };
 
 // --- Helper Function for Audit Logging ---
 const logChanges = async (
-    { user, delegatedUser }, 
-    action_type, 
-    request_id, 
-    changes,
-    transaction
+  { user, delegatedUser },
+  action_type,
+  request_id,
+  changes,
+  transaction
 ) => {
-    const actingUser = delegatedUser || user;
-    const auditLogs = changes.map(change => ({
-        request_id,
-        action_type,
-        field_name: change.field,
-        old_value: String(change.old),
-        new_value: String(change.new),
-        target_entity: change.entity || 'PermohonanPemusnahanLimbah',
-        target_entity_id: change.entity_id || request_id,
-        // Snapshot the user performing the change
-        changer_id: user.log_NIK,
-        changer_name: user.Nama,
-        changer_jabatan: user.Jabatan,
-        changer_id_delegated: delegatedUser ? delegatedUser.log_NIK : null,
-        changer_name_delegated: delegatedUser ? delegatedUser.Nama : null,
-        changer_jabatan_delegated: delegatedUser ? delegatedUser.Jabatan : null,
-    }));
+  const actingUser = delegatedUser || user;
+  const auditLogs = changes.map(change => ({
+    request_id,
+    action_type,
+    field_name: change.field,
+    old_value: String(change.old),
+    new_value: String(change.new),
+    target_entity: change.entity || 'PermohonanPemusnahanLimbah',
+    target_entity_id: change.entity_id || request_id,
+    // Snapshot the user performing the change
+    changer_id: user.log_NIK,
+    changer_name: user.Nama,
+    changer_jabatan: user.Jabatan,
+    changer_id_delegated: delegatedUser ? delegatedUser.log_NIK : null,
+    changer_name_delegated: delegatedUser ? delegatedUser.Nama : null,
+    changer_jabatan_delegated: delegatedUser ? delegatedUser.Jabatan : null,
+  }));
 
-    if (auditLogs.length > 0) {
-        await AuditLog.bulkCreate(auditLogs, { transaction });
-    }
+  if (auditLogs.length > 0) {
+    await AuditLog.bulkCreate(auditLogs, { transaction });
+  }
 };
 
 // Helper to parse a datetime string sent from frontend.
@@ -226,57 +226,57 @@ const parseLocalDateTime = (dtstr) => {
  * It uses a transaction to ensure that either everything is created successfully, or nothing is.
  */
 const createPermohonan = async (req, res) => {
-    const transaction = await sequelize.transaction();
+  const transaction = await sequelize.transaction();
+  try {
+    const { bagian, bentuk_limbah, golongan_limbah_id, jenis_limbah_b3_id, is_produk_pangan, details } = req.body;
+    const { user, delegatedUser } = req;
+
+    // Determine the appropriate workflow based on waste type
+    const workflowId = await determineApprovalWorkflow(golongan_limbah_id, jenis_limbah_b3_id, is_produk_pangan);
+
+    const permohonan = await PermohonanPemusnahanLimbah.create({
+      bagian: user.emp_DeptID,
+      bentuk_limbah,
+      golongan_limbah_id,
+      jenis_limbah_b3_id,
+      is_produk_pangan: is_produk_pangan || false,
+      approval_workflow_id: workflowId,
+      current_step_id: null,
+      status: 'Draft',
+      requester_id: user.log_NIK,
+      requester_name: user.Nama,
+      requester_jabatan: user.Jabatan,
+      requester_id_delegated: delegatedUser ? delegatedUser.log_NIK : null,
+      requester_name_delegated: delegatedUser ? delegatedUser.Nama : null,
+      requester_jabatan_delegated: delegatedUser ? delegatedUser.Jabatan : null,
+    }, { transaction });
+
+    const detailItems = details.map(detail => ({ ...detail, request_id: permohonan.request_id }));
+    await DetailLimbah.bulkCreate(detailItems, { transaction });
+
+    // Compute jumlah_item as total number of detail/lampiran rows
     try {
-        const { bagian, bentuk_limbah, golongan_limbah_id, jenis_limbah_b3_id, is_produk_pangan, details } = req.body;
-        const { user, delegatedUser } = req;
-
-        // Determine the appropriate workflow based on waste type
-        const workflowId = await determineApprovalWorkflow(golongan_limbah_id, jenis_limbah_b3_id, is_produk_pangan);
-
-        const permohonan = await PermohonanPemusnahanLimbah.create({
-            bagian: user.emp_DeptID,
-            bentuk_limbah,
-            golongan_limbah_id,
-            jenis_limbah_b3_id,
-            is_produk_pangan: is_produk_pangan || false,
-            approval_workflow_id: workflowId,
-            current_step_id: null,
-            status: 'Draft',
-            requester_id: user.log_NIK,
-            requester_name: user.Nama,
-            requester_jabatan: user.Jabatan,
-            requester_id_delegated: delegatedUser ? delegatedUser.log_NIK : null,
-            requester_name_delegated: delegatedUser ? delegatedUser.Nama : null,
-            requester_jabatan_delegated: delegatedUser ? delegatedUser.Jabatan : null,
-        }, { transaction });
-
-        const detailItems = details.map(detail => ({ ...detail, request_id: permohonan.request_id }));
-        await DetailLimbah.bulkCreate(detailItems, { transaction });
-
-        // Compute jumlah_item as total number of detail/lampiran rows
-        try {
-          permohonan.jumlah_item = (details || []).length;
-          await permohonan.save({ transaction });
-        } catch (e) {
-          console.warn('[createPermohonan] Failed to compute jumlah_item:', e && e.message);
-        }
-
-        // Log the creation action
-        await logChanges(
-            req, 'ADD_ITEM', permohonan.request_id, 
-            [{ field: 'request', old: null, new: `Request created with ID ${permohonan.request_id}` }],
-            transaction
-        );
-
-        await transaction.commit();
-        res.status(201).json({ message: "Draft permohonan created successfully", data: permohonan });
-
-    } catch (error) {
-        await transaction.rollback();
-        console.error("Failed to create permohonan:", error);
-        res.status(500).json({ message: "Error creating permohonan", error: error.message });
+      permohonan.jumlah_item = (details || []).length;
+      await permohonan.save({ transaction });
+    } catch (e) {
+      console.warn('[createPermohonan] Failed to compute jumlah_item:', e && e.message);
     }
+
+    // Log the creation action
+    await logChanges(
+      req, 'ADD_ITEM', permohonan.request_id,
+      [{ field: 'request', old: null, new: `Request created with ID ${permohonan.request_id}` }],
+      transaction
+    );
+
+    await transaction.commit();
+    res.status(201).json({ message: "Draft permohonan created successfully", data: permohonan });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error("Failed to create permohonan:", error);
+    res.status(500).json({ message: "Error creating permohonan", error: error.message });
+  }
 };
 
 /**
@@ -285,18 +285,18 @@ const createPermohonan = async (req, res) => {
  */
 const getAllPermohonan = async (req, res) => {
   try {
-    const { 
-      page = 1, 
-      limit = 8, 
-      search = '', 
-      column = '', 
-      userOnly = false, 
-      pendingApproval = false, 
-      processedBy = false, 
-      status, 
-      verificationOnly = false, 
-      statusFilter = '', 
-      group = '', 
+    const {
+      page = 1,
+      limit = 8,
+      search = '',
+      column = '',
+      userOnly = false,
+      pendingApproval = false,
+      processedBy = false,
+      status,
+      verificationOnly = false,
+      statusFilter = '',
+      group = '',
       excludeCompleted = false,
       // New params for all-permohonan tab (non-KL users)
       filterByBagian = false,
@@ -311,22 +311,22 @@ const getAllPermohonan = async (req, res) => {
     // For data filtering: use the actual logged-in user, not the delegated user
     // For actions: use delegatedUser if available (handled in other operations)
     const filteringUser = user; // Always use the logged-in user for filtering
-    
+
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-  // Helper: Object.keys() does NOT return Symbol keys (e.g. Op.or, Op.and).
-  // Sequelize operators are Symbols, so we must also check getOwnPropertySymbols.
-  const hasWhereConditions = (obj) => {
-    if (!obj || typeof obj !== 'object') return false;
-    return Object.keys(obj).length > 0 || Object.getOwnPropertySymbols(obj).length > 0;
-  };
+    // Helper: Object.keys() does NOT return Symbol keys (e.g. Op.or, Op.and).
+    // Sequelize operators are Symbols, so we must also check getOwnPropertySymbols.
+    const hasWhereConditions = (obj) => {
+      if (!obj || typeof obj !== 'object') return false;
+      return Object.keys(obj).length > 0 || Object.getOwnPropertySymbols(obj).length > 0;
+    };
 
-  // --- SEARCH LOGIC ---
-  // Columns that will be filtered post-query (to avoid SQL join issues)
-  const postQueryFilterColumns = ['status', 'namaLimbah', 'nomorAnalisa', 'bobot'];
-  const needsPostQueryFilter = search && column && postQueryFilterColumns.includes(column);
-  
-  let whereClause = {};
+    // --- SEARCH LOGIC ---
+    // Columns that will be filtered post-query (to avoid SQL join issues)
+    const postQueryFilterColumns = ['status', 'namaLimbah', 'nomorAnalisa', 'bobot'];
+    const needsPostQueryFilter = search && column && postQueryFilterColumns.includes(column);
+
+    let whereClause = {};
     if (search && column && !needsPostQueryFilter) {
       const searchCondition = { [Op.iLike]: `%${search}%` };
 
@@ -375,7 +375,7 @@ const getAllPermohonan = async (req, res) => {
     let statusFilterStepLevel = null;
     if (statusFilter) {
       const statusFilters = statusFilter.split(',').map(s => s.trim());
-      
+
       if (statusFilters.length === 1) {
         // Single status filter
         if (statusFilter === 'Verification') {
@@ -396,7 +396,7 @@ const getAllPermohonan = async (req, res) => {
       } else {
         // Multiple status filters (e.g., ["Verification", "Pembuatan BAP"])
         const statusConditions = [];
-        
+
         for (const sf of statusFilters) {
           if (sf === 'Verification') {
             // InProgress at step 3 will be handled separately with step filtering
@@ -407,13 +407,13 @@ const getAllPermohonan = async (req, res) => {
             statusConditions.push({ status: 'Rejected' });
           }
         }
-        
+
         if (statusConditions.length > 0) {
           // For mixed filters, we need to handle this differently
           // If includes Verification, we need step_level = 3 for InProgress
           const hasVerification = statusFilters.includes('Verification');
           const hasPembuatanBAP = statusFilters.includes('Pembuatan BAP');
-          
+
           if (hasVerification && hasPembuatanBAP) {
             // Show InProgress at step 3 OR Pembuatan BAP
             whereClause[Op.or] = [
@@ -472,7 +472,7 @@ const getAllPermohonan = async (req, res) => {
     if (statusFilterStepLevel) {
       // Check if we have multiple statuses (OR condition)
       const hasMultipleStatuses = whereClause[Op.or] && Array.isArray(whereClause[Op.or]);
-      
+
       if (hasMultipleStatuses) {
         // For multiple statuses (e.g., Verification OR Pembuatan BAP)
         // We need required: false and filter in post-processing
@@ -515,29 +515,29 @@ const getAllPermohonan = async (req, res) => {
       const normalizedUserBagian = String(userBagian).toUpperCase();
       // AD1 and AD2 share data - both see each other's requests
       const isADDept = normalizedUserBagian === 'AD1' || normalizedUserBagian === 'AD2';
-      
+
       // Initial bagian conditions: for AD group include both AD1 and AD2
       const bagianConditions = isADDept
         ? [
-            Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), 'AD1'),
-            Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), 'AD2')
-          ]
+          Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), 'AD1'),
+          Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), 'AD2')
+        ]
         : [
-            Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), normalizedUserBagian)
-          ];
-      
+          Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), normalizedUserBagian)
+        ];
+
       // Add additional golongan groups (for QA: recall, for PN1: recall-precursor)
       if (additionalGroups) {
         const additionalGroupList = additionalGroups.split(',').map(g => g.trim());
         const additionalGolonganNames = [];
-        
+
         for (const grp of additionalGroupList) {
           const golonganNames = getGolonganNamesByGroup(grp);
           if (golonganNames) {
             additionalGolonganNames.push(...golonganNames);
           }
         }
-        
+
         if (additionalGolonganNames.length > 0) {
           // User can see: their bagian OR requests with additional golongan
           bagianConditions.push({
@@ -545,7 +545,7 @@ const getAllPermohonan = async (req, res) => {
           });
         }
       }
-      
+
       // Apply bagian filter (OR with additional groups if any)
       if (bagianConditions.length > 1) {
         // Combine with existing where using AND
@@ -573,21 +573,23 @@ const getAllPermohonan = async (req, res) => {
         }
       }
     }
-    
+
     // Filter by user's department (Dept. Requests tab)
     if ((deptOnly === 'true' || deptOnly === true) && userDept) {
       const normalizedUserDept = String(userDept).toUpperCase();
       // AD1 and AD2 share data - both see each other's requests
       const isADDept = normalizedUserDept === 'AD1' || normalizedUserDept === 'AD2';
       const deptCondition = isADDept
-        ? { [Op.or]: [
+        ? {
+          [Op.or]: [
             Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), 'AD1'),
             Sequelize.where(Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')), 'AD2')
-          ] }
+          ]
+        }
         : Sequelize.where(
-            Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')),
-            normalizedUserDept
-          );
+          Sequelize.fn('UPPER', Sequelize.col('PermohonanPemusnahanLimbah.bagian')),
+          normalizedUserDept
+        );
 
       if (hasWhereConditions(queryOptions.where)) {
         queryOptions.where = {
@@ -605,7 +607,7 @@ const getAllPermohonan = async (req, res) => {
     if (userOnly === 'true' || userOnly === true) {
       // Merge with existing whereClause if it exists (from search filters)
       const userConditions = [{ requester_id: filteringUser.log_NIK }];
-      
+
       // NOTE: excludeCompleted no longer adds a WHERE status != 'Completed' here.
       // Instead, BeritaAcara is always included (see base queryOptions) and post-processing
       // hides Completed permohonan only when its linked BAP is also Completed.
@@ -644,10 +646,10 @@ const getAllPermohonan = async (req, res) => {
                 { approver_id_delegated: filteringUser.log_NIK }
               ]
             },
-            { 
-              status: { 
-                [Op.in]: ['Approved', 'Rejected'] 
-              } 
+            {
+              status: {
+                [Op.in]: ['Approved', 'Rejected']
+              }
             }
           ]
         }
@@ -669,7 +671,7 @@ const getAllPermohonan = async (req, res) => {
       } else {
         queryOptions.where = { [Op.and]: processedByConditions };
       }
-      
+
       // Add CurrentStep for display purposes
       if (!queryOptions.include.some(inc => inc.as === 'CurrentStep')) {
         queryOptions.include.push({
@@ -690,7 +692,7 @@ const getAllPermohonan = async (req, res) => {
           [require('sequelize').Op.ne]: null
         }
       };
-      
+
       if (hasWhereConditions(queryOptions.where)) {
         // Combine with existing search conditions
         queryOptions.where = {
@@ -702,12 +704,12 @@ const getAllPermohonan = async (req, res) => {
       } else {
         queryOptions.where = inProgressConditions;
       }
-      
+
       // Remove existing CurrentStep include to avoid conflicts, but KEEP GolonganLimbah for group filtering
-      queryOptions.include = queryOptions.include.filter(include => 
+      queryOptions.include = queryOptions.include.filter(include =>
         !(include.as === 'CurrentStep')
       );
-      
+
       // Add required includes for authorization service
       queryOptions.include.push(
         {
@@ -720,7 +722,7 @@ const getAllPermohonan = async (req, res) => {
           required: false
         }
       );
-      
+
       // Ensure GolonganLimbah is included (needed for group filtering and authorization)
       if (!queryOptions.include.some(inc => inc.model === GolonganLimbah)) {
         queryOptions.include.push({
@@ -729,7 +731,7 @@ const getAllPermohonan = async (req, res) => {
           required: !!group
         });
       }
-      
+
       // Mark that we need post-processing
       const needsAuthorizationFilter = true;
     }
@@ -743,24 +745,24 @@ const getAllPermohonan = async (req, res) => {
       // The subquery approach doesn't work well with current_step_id filtering
       // So we fetch all and filter in memory
     }
-    
+
     // Check if we need to filter InProgress to step 3 only (for Verification status filter)
     // This is needed when statusFilter includes both 'Verification' and 'Pembuatan BAP'
-    const needsVerificationStepFilter = statusFilterStepLevel === 3 && 
-      whereClause[Op.or] && 
+    const needsVerificationStepFilter = statusFilterStepLevel === 3 &&
+      whereClause[Op.or] &&
       Array.isArray(whereClause[Op.or]);
 
     // For pendingApproval, processedBy, post-query filters, or verification step filter, we need to remove pagination from query and do it after filtering
     // because the filtering logic requires post-processing
-    const needsPostProcessing = (pendingApproval === 'true' || pendingApproval === true) || 
-                                 (processedBy === 'true' || processedBy === true) || 
-                                 needsPostQueryFilter ||
-                                 needsVerificationStepFilter ||
-                                 (excludeCompleted === 'true' || excludeCompleted === true) ||
-                                 // deptOnly: hide Completed permohonan whose BAP is also Completed
-                                 (deptOnly === 'true' || deptOnly === true);
+    const needsPostProcessing = (pendingApproval === 'true' || pendingApproval === true) ||
+      (processedBy === 'true' || processedBy === true) ||
+      needsPostQueryFilter ||
+      needsVerificationStepFilter ||
+      (excludeCompleted === 'true' || excludeCompleted === true) ||
+      // deptOnly: hide Completed permohonan whose BAP is also Completed
+      (deptOnly === 'true' || deptOnly === true);
     let queryOptionsForDB = { ...queryOptions };
-    
+
     if (needsPostProcessing) {
       // Remove limit and offset for initial query
       delete queryOptionsForDB.limit;
@@ -768,20 +770,20 @@ const getAllPermohonan = async (req, res) => {
     }
 
     const { count, rows: permohonanList } = await PermohonanPemusnahanLimbah.findAndCountAll(queryOptionsForDB);
-    
+
     // Post-processing filters for pendingApproval, processedBy, and certain column searches
     // Important: For users who approve multiple steps (e.g., HSE Manager on step 1 and 4),
     // we only check current step, not any previous steps they may have approved.
     let filteredList = permohonanList;
     let filteredCount = count;
-    
+
     // Hide Completed permohonan whose BAP is also Completed (or has no BAP at all).
     // Applies to:
     //   - excludeCompleted=true (My Requests tab, personal view)
     //   - deptOnly=true (Dept. Requests tab, dept-wide view)
     // Permohonan that are Completed but whose BAP is still Draft/InProgress/Rejected stay visible.
     if ((excludeCompleted === 'true' || excludeCompleted === true) ||
-        (deptOnly === 'true' || deptOnly === true)) {
+      (deptOnly === 'true' || deptOnly === true)) {
       filteredList = filteredList.filter(request => {
         const itemData = request.toJSON ? request.toJSON() : request;
         if (itemData.status !== 'Completed') return true; // keep non-Completed as-is
@@ -795,10 +797,10 @@ const getAllPermohonan = async (req, res) => {
     // Apply post-query column filters if needed
     if (needsPostQueryFilter) {
       const searchLower = search.toLowerCase();
-      
+
       filteredList = filteredList.filter(request => {
         const itemData = request.toJSON ? request.toJSON() : request;
-        
+
         if (column === 'status') {
           // Check both CurrentStep.step_name and status field
           const stepName = itemData.CurrentStep?.step_name || '';
@@ -819,52 +821,52 @@ const getAllPermohonan = async (req, res) => {
         }
         return true;
       });
-      
+
       filteredCount = filteredList.length;
     }
-    
+
     // Post-processing filter: For Verification + Pembuatan BAP combined filter,
     // ensure InProgress requests are only at step level 3 (Verification step)
     // This is because the SQL query uses OR for statuses and can't filter step_level for only one status
     if (needsVerificationStepFilter) {
       filteredList = filteredList.filter(request => {
         const itemData = request.toJSON ? request.toJSON() : request;
-        
+
         // Pembuatan BAP status - always include
         if (itemData.status === 'Pembuatan BAP') {
           return true;
         }
-        
+
         // InProgress status - only include if at step level 3 (Verification)
         if (itemData.status === 'InProgress') {
           const stepLevel = itemData.CurrentStep?.step_level || null;
           return stepLevel === 3;
         }
-        
+
         // Other statuses - exclude (shouldn't happen with proper filtering)
         return false;
       });
-      
+
       filteredCount = filteredList.length;
     }
-    
+
     if (pendingApproval === 'true' || pendingApproval === true) {
       // Use unified authorization service for filtering
       const authorizedRequests = [];
-      
+
       for (const request of filteredList) {
         const canApprove = await checkUserCanApproveRequest(filteringUser.log_NIK, request);
         const hasProcessed = hasUserProcessedCurrentStep(request, filteringUser.log_NIK);
-        
+
         if (canApprove && !hasProcessed) {
           authorizedRequests.push(request);
         }
       }
-      
+
       filteredList = authorizedRequests;
       filteredCount = authorizedRequests.length;
     }
-    
+
     if (processedBy === 'true' || processedBy === true) {
       // The SQL query already filters by ApprovalHistory (user has processed)
       // and excludes Completed status. No additional post-filtering needed.
@@ -878,43 +880,43 @@ const getAllPermohonan = async (req, res) => {
       });
       filteredCount = filteredList.length;
     }
-    
+
     // Apply pagination AFTER filtering for processedBy
     if (needsPostProcessing && filteredList.length > 0) {
       const startIndex = offset;
       const endIndex = offset + parseInt(limit);
       filteredList = filteredList.slice(startIndex, endIndex);
     }
-    
+
     const totalPages = Math.ceil(filteredCount / parseInt(limit));
-    
+
     // Pre-compute pending status for all requests in parallel for better performance
     const pendingStatusPromises = filteredList.map(async (request) => {
       const requestData = request.toJSON ? request.toJSON() : request;
-      
+
       // Only check pending status for InProgress requests with a current step
       if (requestData.status !== 'InProgress' || !requestData.current_step_id) {
         return { requestId: requestData.request_id, isPending: false, canApprove: false };
       }
-      
+
       // Check if user can approve this request
       const canApprove = await checkUserCanApproveRequest(filteringUser.log_NIK, request);
-      
+
       // Check if user has already processed this step
       const hasProcessed = hasUserProcessedCurrentStep(request, filteringUser.log_NIK);
-      
+
       return {
         requestId: requestData.request_id,
         isPending: canApprove && !hasProcessed,
         canApprove: canApprove
       };
     });
-    
+
     const pendingStatuses = await Promise.all(pendingStatusPromises);
     const pendingStatusMap = new Map(
       pendingStatuses.map(ps => [ps.requestId, { isPending: ps.isPending, canApprove: ps.canApprove }])
     );
-    
+
     // Pre-compute user's verification role info
     // Uses auth user info (emp_DeptID, Job_LevelID) with external API dept as fallback
     let userVerifInfo = null;
@@ -945,11 +947,11 @@ const getAllPermohonan = async (req, res) => {
     // Transform response: add golongan group and pending status
     const transformedList = filteredList.map(item => {
       const itemData = item.toJSON ? item.toJSON() : item;
-      
+
       // Add golongan group
       const golonganName = itemData.GolonganLimbah?.nama || null;
       itemData.golonganGroup = determineGroupFromGolongan(golonganName);
-      
+
       // Add pending approval status for current user
       const pendingStatus = pendingStatusMap.get(itemData.request_id) || { isPending: false, canApprove: false };
       itemData.isPendingForCurrentUser = pendingStatus.isPending;
@@ -957,7 +959,7 @@ const getAllPermohonan = async (req, res) => {
 
       // Expose BAP status so frontend can display it in My Requests
       itemData.bap_status = itemData.BeritaAcara?.status || null;
-      
+
       // Add step info for easier FE rendering
       itemData.currentStepInfo = {
         stepId: itemData.CurrentStep?.step_id || null,
@@ -965,7 +967,7 @@ const getAllPermohonan = async (req, res) => {
         stepName: itemData.CurrentStep?.step_name || null,
         requiredApprovals: itemData.CurrentStep?.required_approvals || 1
       };
-      
+
       // For verification items (step 3), add per-item verification role info
       if (isVerificationContext && itemData.CurrentStep?.step_level === 3) {
         // Extract which VERIF_ROLEs are approved from ApprovalHistory
@@ -995,7 +997,7 @@ const getAllPermohonan = async (req, res) => {
           // Users from pemohon department get Pemohon roles
           if (pemohonDept && (userDept === pemohonDept || (isADGroup(userDept) && isADGroup(pemohonDept)))) {
             if (jobLevel === 7) eligibleRoles.push(1);
-            if (jobLevel === 5 || jobLevel === 6) eligibleRoles.push(2);
+            if (jobLevel === 4 || jobLevel === 5 || jobLevel === 6) eligibleRoles.push(2);
           }
           itemData.userVerificationRoles = eligibleRoles;
         } else {
@@ -1016,7 +1018,7 @@ const getAllPermohonan = async (req, res) => {
       }
       return itemData;
     });
-    
+
     res.status(200).json({
       success: true,
       data: transformedList,
@@ -1027,12 +1029,12 @@ const getAllPermohonan = async (req, res) => {
         totalPages: totalPages
       }
     });
-    
+
   } catch (error) {
     console.error('Error in getAllPermohonan:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       success: false,
-      message: "Error fetching permohonan list", 
+      message: "Error fetching permohonan list",
       error: error.message
     });
   }
@@ -1071,7 +1073,7 @@ const getPermohonanById = async (req, res) => {
     try {
       const histories = Array.isArray(permohonan.ApprovalHistories) ? permohonan.ApprovalHistories : [];
       const currentStepId = permohonan.current_step_id;
-      
+
       if (currentStepId) {
         processedByCurrentUser = histories.some(h => {
           const approverIds = [h.approver_id, h.approver_id_delegated].filter(Boolean).map(String);
@@ -1080,7 +1082,7 @@ const getPermohonanById = async (req, res) => {
           // Only consider as processed if they approved/rejected the CURRENT step
           // Use String comparison to avoid type mismatch issues
           const matchesCurrentStep = String(h.step_id) === String(currentStepId);
-          
+
           return matchesUser && isProcessed && matchesCurrentStep;
         });
       } else {
@@ -1110,95 +1112,95 @@ const getPermohonanById = async (req, res) => {
  * Submits a draft request into the approval workflow.
  */
 const submitPermohonan = async (req, res) => {
-    const transaction = await sequelize.transaction();
-    try {
-        const { id } = req.params;
-        const { user, delegatedUser } = req;
-        const actingUser = delegatedUser || user;
+  const transaction = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const { user, delegatedUser } = req;
+    const actingUser = delegatedUser || user;
 
-        const permohonan = await PermohonanPemusnahanLimbah.findByPk(id, { transaction });
+    const permohonan = await PermohonanPemusnahanLimbah.findByPk(id, { transaction });
 
-        if (!permohonan) {
-            await transaction.rollback();
-            return res.status(404).json({ message: 'Permohonan not found' });
-        }
-
-        // Authorization: Anyone in the same department as the request can submit a Draft.
-        // Explicit delegation (requester_id_delegated) also grants permission regardless of dept.
-        const isSameDept = permohonan.bagian && actingUser.emp_DeptID &&
-          String(permohonan.bagian).toUpperCase() === String(actingUser.emp_DeptID).toUpperCase();
-        const isDelegated = permohonan.requester_id_delegated === actingUser.log_NIK;
-        if (!isSameDept && !isDelegated) {
-          await transaction.rollback();
-          return res.status(403).json({ message: 'You are not authorized to submit this request. Only members of the same department can submit.' });
-        }
-
-        // Job level restriction: Job_LevelID >= 7 (operator/pelaksana) cannot submit.
-        // Only Job_LevelID 1-6 (supervisor and above) may submit ajuan.
-        const actingJobLevel = Number(actingUser.Job_LevelID || user.Job_LevelID || 0);
-        if (actingJobLevel >= 7) {
-          await transaction.rollback();
-          return res.status(403).json({ message: 'Your job level does not permit submitting requests. Please ask a supervisor or above to submit.' });
-        }
-
-        // Ensure it's actually a draft
-        if (permohonan.current_step_id !== null) {
-            await transaction.rollback();
-            return res.status(400).json({ message: 'This request has already been submitted.' });
-        }
-
-        // Find the first step (step_level = 1) for the assigned workflow
-        const firstStep = await ApprovalWorkflowStep.findOne({
-            where: {
-                approval_workflow_id: permohonan.approval_workflow_id,
-                step_level: 1
-            },
-            transaction
-        });
-
-        if (!firstStep) {
-            await transaction.rollback();
-            return res.status(500).json({ message: 'Workflow is not configured correctly; first step not found.' });
-        }
-
-        // Update the request to point to the first step
-        permohonan.current_step_id = firstStep.step_id;
-        permohonan.status = 'InProgress';
-        // Record the timestamp when the draft is submitted.
-        // If client provided submitted_at (as local components or zoned ISO), parse it safely; otherwise use server now.
-        const jakartaTime = require('../utils/jakartaTime');
-        permohonan.submitted_at = parseLocalDateTime(req.body?.submitted_at) || new Date(jakartaTime.nowJakarta());
-
-        // If this request was previously rejected by Manager and returned to Draft,
-        // clear the rejection reason and remove the manager 'Rejected' history entries
-        try {
-          // Clear rejection reason on the main request
-          permohonan.alasan_penolakan = null;
-
-          // Remove any ApprovalHistory rows that are a manager-level rejection for this request
-          // Find any history rows for this request and the first step that have status 'Rejected'
-          await ApprovalHistory.destroy({
-            where: {
-              request_id: permohonan.request_id,
-              step_id: firstStep.step_id,
-              status: 'Rejected'
-            },
-            transaction
-          });
-        } catch (cleanupErr) {
-          // Non-fatal: log but don't abort submission
-          console.warn('Failed to cleanup previous rejection history:', cleanupErr);
-        }
-        await permohonan.save({ transaction });
-
-        await transaction.commit();
-        res.status(200).json({ message: 'Request submitted successfully and is now pending approval.', data: permohonan });
-
-    } catch (error) {
-        await transaction.rollback();
-        console.error("Failed to submit permohonan:", error);
-        res.status(500).json({ message: "Error submitting permohonan", error: error.message });
+    if (!permohonan) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'Permohonan not found' });
     }
+
+    // Authorization: Anyone in the same department as the request can submit a Draft.
+    // Explicit delegation (requester_id_delegated) also grants permission regardless of dept.
+    const isSameDept = permohonan.bagian && actingUser.emp_DeptID &&
+      String(permohonan.bagian).toUpperCase() === String(actingUser.emp_DeptID).toUpperCase();
+    const isDelegated = permohonan.requester_id_delegated === actingUser.log_NIK;
+    if (!isSameDept && !isDelegated) {
+      await transaction.rollback();
+      return res.status(403).json({ message: 'You are not authorized to submit this request. Only members of the same department can submit.' });
+    }
+
+    // Job level restriction: Job_LevelID >= 7 (operator/pelaksana) cannot submit.
+    // Only Job_LevelID 1-6 (supervisor and above) may submit ajuan.
+    const actingJobLevel = Number(actingUser.Job_LevelID || user.Job_LevelID || 0);
+    if (actingJobLevel >= 7) {
+      await transaction.rollback();
+      return res.status(403).json({ message: 'Your job level does not permit submitting requests. Please ask a supervisor or above to submit.' });
+    }
+
+    // Ensure it's actually a draft
+    if (permohonan.current_step_id !== null) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'This request has already been submitted.' });
+    }
+
+    // Find the first step (step_level = 1) for the assigned workflow
+    const firstStep = await ApprovalWorkflowStep.findOne({
+      where: {
+        approval_workflow_id: permohonan.approval_workflow_id,
+        step_level: 1
+      },
+      transaction
+    });
+
+    if (!firstStep) {
+      await transaction.rollback();
+      return res.status(500).json({ message: 'Workflow is not configured correctly; first step not found.' });
+    }
+
+    // Update the request to point to the first step
+    permohonan.current_step_id = firstStep.step_id;
+    permohonan.status = 'InProgress';
+    // Record the timestamp when the draft is submitted.
+    // If client provided submitted_at (as local components or zoned ISO), parse it safely; otherwise use server now.
+    const jakartaTime = require('../utils/jakartaTime');
+    permohonan.submitted_at = parseLocalDateTime(req.body?.submitted_at) || new Date(jakartaTime.nowJakarta());
+
+    // If this request was previously rejected by Manager and returned to Draft,
+    // clear the rejection reason and remove the manager 'Rejected' history entries
+    try {
+      // Clear rejection reason on the main request
+      permohonan.alasan_penolakan = null;
+
+      // Remove any ApprovalHistory rows that are a manager-level rejection for this request
+      // Find any history rows for this request and the first step that have status 'Rejected'
+      await ApprovalHistory.destroy({
+        where: {
+          request_id: permohonan.request_id,
+          step_id: firstStep.step_id,
+          status: 'Rejected'
+        },
+        transaction
+      });
+    } catch (cleanupErr) {
+      // Non-fatal: log but don't abort submission
+      console.warn('Failed to cleanup previous rejection history:', cleanupErr);
+    }
+    await permohonan.save({ transaction });
+
+    await transaction.commit();
+    res.status(200).json({ message: 'Request submitted successfully and is now pending approval.', data: permohonan });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error("Failed to submit permohonan:", error);
+    res.status(500).json({ message: "Error submitting permohonan", error: error.message });
+  }
 };
 
 /**
@@ -1206,534 +1208,534 @@ const submitPermohonan = async (req, res) => {
  * Handles the logic for a user approving a request at its current step.
  */
 const approvePermohonan = async (req, res) => {
-    const transaction = await sequelize.transaction();
+  const transaction = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const { user, delegatedUser } = req; // User data from auth middleware
+    // For authorization: by default use the logged-in user. However the frontend
+    // may pass an explicit verifierId when the approval is performed by a
+    // different approver who authenticated locally in the modal. Use that
+    // verifierId for the authorization check if present.
+    const actingUser = delegatedUser || user; // For audit trail - who the action is being performed as
+    const verifierId = req.body?.verifierId || user.log_NIK;
+    // If verifierId differs from the logged-in user, construct a minimal
+    // authorizingUser object so checkApprovalAuthorization will query the
+    // external approval API using verifier's ID.
+    const authorizingUser = verifierId === user.log_NIK ? user : { log_NIK: verifierId };
+
+    // 1. Find the request and its current step details
+    const permohonan = await PermohonanPemusnahanLimbah.findByPk(id, {
+      include: [{
+        model: ApprovalWorkflowStep,
+        as: 'CurrentStep',
+        include: [ApprovalWorkflowApprover]
+      }],
+      transaction
+    });
+
+    if (!permohonan) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'Permohonan not found' });
+    }
+    if (!permohonan.CurrentStep) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'Request is not currently in an approval step.' });
+    }
+
+    // 2. Authorization Check using external API (or fallback DB)
+    let isApprover = await checkApprovalAuthorization(authorizingUser, permohonan);
+
+    // TEST BYPASS: allow developers to bypass Verifikasi Lapangan authorization when
+    // process.env.TEST_BYPASS_VERIFICATION === 'true' AND a valid token header is provided.
+    // This is intentionally strict: it only applies to step_level === 3 (Verifikasi Lapangan)
+    // and requires the header `x-test-bypass-token` to equal process.env.TEST_BYPASS_TOKEN.
     try {
-      const { id } = req.params;
-      const { user, delegatedUser } = req; // User data from auth middleware
-  // For authorization: by default use the logged-in user. However the frontend
-  // may pass an explicit verifierId when the approval is performed by a
-  // different approver who authenticated locally in the modal. Use that
-  // verifierId for the authorization check if present.
-  const actingUser = delegatedUser || user; // For audit trail - who the action is being performed as
-  const verifierId = req.body?.verifierId || user.log_NIK;
-  // If verifierId differs from the logged-in user, construct a minimal
-  // authorizingUser object so checkApprovalAuthorization will query the
-  // external approval API using verifier's ID.
-  const authorizingUser = verifierId === user.log_NIK ? user : { log_NIK: verifierId };
-  
-      // 1. Find the request and its current step details
-      const permohonan = await PermohonanPemusnahanLimbah.findByPk(id, {
-        include: [{
-          model: ApprovalWorkflowStep,
-          as: 'CurrentStep',
-          include: [ApprovalWorkflowApprover]
-        }],
+      const bypassEnabled = String(process.env.TEST_BYPASS_VERIFICATION || '').toLowerCase() === 'true';
+      const bypassToken = process.env.TEST_BYPASS_TOKEN || null;
+      const providedToken = (req.headers['x-test-bypass-token'] || req.headers['X-Test-Bypass-Token'] || '').toString();
+      const isVerificationStep = permohonan.CurrentStep && permohonan.CurrentStep.step_level === 3;
+      if (!isApprover && bypassEnabled && bypassToken && providedToken && isVerificationStep) {
+        if (providedToken === bypassToken) {
+          isApprover = true;
+          // mark request so downstream code or audit logs can note this was a bypass
+          req.usedVerificationBypass = true;
+          console.warn('[TEST_BYPASS] Verification bypass used for request', permohonan.request_id, 'by', user && user.log_NIK);
+        }
+      }
+    } catch (bypassErr) {
+      console.warn('Error evaluating test bypass:', bypassErr && bypassErr.message);
+    }
+
+    if (!isApprover) {
+      await transaction.rollback();
+      return res.status(403).json({
+        message: 'You are not authorized to approve this request at its current step.',
+        debug: {
+          userId: authorizingUser.log_NIK,
+          currentStepLevel: permohonan.CurrentStep.step_level,
+          requestDepartment: permohonan.bagian || permohonan.requester_dept_id
+        }
+      });
+    }
+
+    // 3. Generate nomor_permohonan
+    // - For Precursor/OOT (pure): generate after APJ approval (step_level === 2)
+    // - For Recall & Prekursor: generate after ALL required APJ roles (PN + QA) have approved at step_level === 2
+    // - For other requests: generate after Department Manager approval (step_level === 1)
+    let nomorPermohonan = permohonan.nomor_permohonan;
+    if (!nomorPermohonan) {
+      // Determine golongan category for this request
+      let isPrecursorForNomor = false;
+      let isRecallPrecursorForNomor = false;
+      try {
+        const golonganForNomor = await GolonganLimbah.findByPk(permohonan.golongan_limbah_id, { transaction });
+        const catNameForNomor = (golonganForNomor && golonganForNomor.nama) ? String(golonganForNomor.nama).toLowerCase() : '';
+        isPrecursorForNomor = catNameForNomor.includes('prekursor') || catNameForNomor.includes('oot');
+        isRecallPrecursorForNomor = catNameForNomor.includes('recall') && catNameForNomor.includes('prekursor');
+      } catch (gErr) {
+        console.warn('[approvePermohonan] Failed to check golongan for nomor generation:', gErr && gErr.message);
+      }
+
+      let shouldGenerateNomor = false;
+
+      if (isRecallPrecursorForNomor && permohonan.CurrentStep.step_level === 2) {
+        // Recall & Prekursor: only generate after BOTH APJ PN and APJ QA have approved
+        // Check existing approvals + determine current approver's APJ role
+        const existingApprovals = await ApprovalHistory.findAll({
+          where: {
+            request_id: permohonan.request_id,
+            step_id: permohonan.current_step_id,
+            status: 'Approved'
+          },
+          transaction
+        });
+        const approvedRolesSet = new Set();
+        existingApprovals.forEach(h => {
+          const jab = h.approver_jabatan || '';
+          const m = jab.match(/APJ_ROLE:(\w+)/);
+          if (m && m[1]) approvedRolesSet.add(m[1]);
+        });
+
+        // Determine the current approver's APJ role (this approval hasn't been recorded yet)
+        try {
+          const axios = require('axios');
+          const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
+          const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
+          const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
+          const apjItems = items.filter(i =>
+            String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah' &&
+            Number(i.Appr_No) === 2
+          );
+          const userApj = apjItems.find(item => String(item.Appr_ID) === String(verifierId));
+          if (userApj && userApj.Appr_DeptID) {
+            const dept = String(userApj.Appr_DeptID).toUpperCase();
+            if (dept === 'PN1') approvedRolesSet.add('PN');
+            else if (dept === 'QA') approvedRolesSet.add('QA');
+          }
+        } catch (extErr) {
+          console.warn('[approvePermohonan] Failed to get current APJ role for nomor generation:', extErr.message);
+        }
+
+        // Both PN and QA must be present (existing + current) to generate nomor
+        shouldGenerateNomor = approvedRolesSet.has('PN') && approvedRolesSet.has('QA');
+      } else if (isPrecursorForNomor) {
+        // Pure Precursor/OOT: generate after any APJ approve (step_level 2)
+        shouldGenerateNomor = permohonan.CurrentStep.step_level === 2;
+      } else {
+        // Standard / Recall: generate after Dept Manager approve (step_level 1)
+        shouldGenerateNomor = permohonan.CurrentStep.step_level === 1;
+      }
+
+      if (shouldGenerateNomor) {
+        try {
+          nomorPermohonan = await generateNomorPermohonan(permohonan.bentuk_limbah, transaction);
+          permohonan.nomor_permohonan = nomorPermohonan;
+
+          // Log the nomor_permohonan generation
+          await logChanges(
+            req, 'UPDATE', permohonan.request_id,
+            [{ field: 'nomor_permohonan', old: null, new: nomorPermohonan }],
+            transaction
+          );
+        } catch (nomorError) {
+          await transaction.rollback();
+          console.error("Failed to generate nomor_permohonan:", nomorError);
+          console.error("Permohonan data:", JSON.stringify(permohonan.toJSON(), null, 2));
+
+          // Handle race condition - ask user to resubmit
+          if (nomorError.message.includes('limit exceeded') || nomorError.message.includes('already exists')) {
+            return res.status(409).json({
+              message: 'Unable to generate request number due to system constraints. Please cancel this request and resubmit.',
+              error: 'REQUEST_NUMBER_CONFLICT'
+            });
+          }
+
+          return res.status(500).json({ message: "Error generating request number", error: nomorError.message });
+        }
+      }
+    }
+
+    // 4. Record the approval in the history table
+    // For Verifikasi Lapangan (step_level === 3) we support 4 distinct roles
+    // (pelaksana pemohon, supervisor pemohon, pelaksana hse, supervisor hse).
+    // Frontend passes `roleId` in payload when performing a verification approval.
+    const roleId = req.body.roleId || null;
+
+    // If this is a verification step, ensure the same role can't approve twice.
+    const currentStepLevel = permohonan.CurrentStep.step_level;
+
+    if (currentStepLevel === 3 && roleId) {
+      // Check if an ApprovalHistory entry already exists for this request + step + role
+      const existing = await ApprovalHistory.findOne({
+        where: {
+          request_id: permohonan.request_id,
+          step_id: permohonan.current_step_id,
+          approver_jabatan: { [require('sequelize').Op.like]: `%VERIF_ROLE:${roleId}%` },
+          status: 'Approved'
+        },
         transaction
       });
-  
-      if (!permohonan) {
-        await transaction.rollback();
-        return res.status(404).json({ message: 'Permohonan not found' });
-      }
-      if (!permohonan.CurrentStep) {
-          await transaction.rollback();
-          return res.status(400).json({ message: 'Request is not currently in an approval step.'});
-      }
-  
-      // 2. Authorization Check using external API (or fallback DB)
-      let isApprover = await checkApprovalAuthorization(authorizingUser, permohonan);
 
-      // TEST BYPASS: allow developers to bypass Verifikasi Lapangan authorization when
-      // process.env.TEST_BYPASS_VERIFICATION === 'true' AND a valid token header is provided.
-      // This is intentionally strict: it only applies to step_level === 3 (Verifikasi Lapangan)
-      // and requires the header `x-test-bypass-token` to equal process.env.TEST_BYPASS_TOKEN.
+      if (existing) {
+        // Duplicate approval for same role - treat as idempotent success
+        await transaction.commit();
+        return res.status(200).json({ message: 'Role already approved previously.', data: permohonan });
+      }
+    }
+
+    // Determine APJ role for step level 2 (APJ approval)
+    let apjRole = null;
+    if (currentStepLevel === 2) {
       try {
-        const bypassEnabled = String(process.env.TEST_BYPASS_VERIFICATION || '').toLowerCase() === 'true';
-        const bypassToken = process.env.TEST_BYPASS_TOKEN || null;
-        const providedToken = (req.headers['x-test-bypass-token'] || req.headers['X-Test-Bypass-Token'] || '').toString();
-        const isVerificationStep = permohonan.CurrentStep && permohonan.CurrentStep.step_level === 3;
-        if (!isApprover && bypassEnabled && bypassToken && providedToken && isVerificationStep) {
-          if (providedToken === bypassToken) {
-            isApprover = true;
-            // mark request so downstream code or audit logs can note this was a bypass
-            req.usedVerificationBypass = true;
-            console.warn('[TEST_BYPASS] Verification bypass used for request', permohonan.request_id, 'by', user && user.log_NIK);
-          }
+        // Get approver's department from external API
+        const axios = require('axios');
+        const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
+        const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
+        const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
+        const apjItems = items.filter(i =>
+          String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah' &&
+          Number(i.Appr_No) === 2
+        );
+
+        const userApj = apjItems.find(item => String(item.Appr_ID) === String(verifierId));
+        if (userApj && userApj.Appr_DeptID) {
+          const dept = String(userApj.Appr_DeptID).toUpperCase();
+          if (dept === 'PN1') apjRole = 'PN';
+          else if (dept === 'QA') apjRole = 'QA';
+          else if (dept === 'PC') apjRole = 'PC';
         }
-      } catch (bypassErr) {
-        console.warn('Error evaluating test bypass:', bypassErr && bypassErr.message);
+      } catch (apjErr) {
+        console.warn('[approvePermohonan] Failed to determine APJ role:', apjErr.message);
       }
 
-      if (!isApprover) {
-        await transaction.rollback();
-        return res.status(403).json({ 
-          message: 'You are not authorized to approve this request at its current step.',
-          debug: {
-            userId: authorizingUser.log_NIK,
-            currentStepLevel: permohonan.CurrentStep.step_level,
-            requestDepartment: permohonan.bagian || permohonan.requester_dept_id
-          }
-        });
-      }
-  
-      // 3. Generate nomor_permohonan
-      // - For Precursor/OOT (pure): generate after APJ approval (step_level === 2)
-      // - For Recall & Prekursor: generate after ALL required APJ roles (PN + QA) have approved at step_level === 2
-      // - For other requests: generate after Department Manager approval (step_level === 1)
-      let nomorPermohonan = permohonan.nomor_permohonan;
-      if (!nomorPermohonan) {
-        // Determine golongan category for this request
-        let isPrecursorForNomor = false;
-        let isRecallPrecursorForNomor = false;
-        try {
-          const golonganForNomor = await GolonganLimbah.findByPk(permohonan.golongan_limbah_id, { transaction });
-          const catNameForNomor = (golonganForNomor && golonganForNomor.nama) ? String(golonganForNomor.nama).toLowerCase() : '';
-          isPrecursorForNomor = catNameForNomor.includes('prekursor') || catNameForNomor.includes('oot');
-          isRecallPrecursorForNomor = catNameForNomor.includes('recall') && catNameForNomor.includes('prekursor');
-        } catch (gErr) {
-          console.warn('[approvePermohonan] Failed to check golongan for nomor generation:', gErr && gErr.message);
-        }
-
-        let shouldGenerateNomor = false;
-
-        if (isRecallPrecursorForNomor && permohonan.CurrentStep.step_level === 2) {
-          // Recall & Prekursor: only generate after BOTH APJ PN and APJ QA have approved
-          // Check existing approvals + determine current approver's APJ role
-          const existingApprovals = await ApprovalHistory.findAll({
-            where: {
-              request_id: permohonan.request_id,
-              step_id: permohonan.current_step_id,
-              status: 'Approved'
-            },
-            transaction
-          });
-          const approvedRolesSet = new Set();
-          existingApprovals.forEach(h => {
-            const jab = h.approver_jabatan || '';
-            const m = jab.match(/APJ_ROLE:(\w+)/);
-            if (m && m[1]) approvedRolesSet.add(m[1]);
-          });
-
-          // Determine the current approver's APJ role (this approval hasn't been recorded yet)
-          try {
-            const axios = require('axios');
-            const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
-            const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
-            const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
-            const apjItems = items.filter(i =>
-              String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah' &&
-              Number(i.Appr_No) === 2
-            );
-            const userApj = apjItems.find(item => String(item.Appr_ID) === String(verifierId));
-            if (userApj && userApj.Appr_DeptID) {
-              const dept = String(userApj.Appr_DeptID).toUpperCase();
-              if (dept === 'PN1') approvedRolesSet.add('PN');
-              else if (dept === 'QA') approvedRolesSet.add('QA');
-            }
-          } catch (extErr) {
-            console.warn('[approvePermohonan] Failed to get current APJ role for nomor generation:', extErr.message);
-          }
-
-          // Both PN and QA must be present (existing + current) to generate nomor
-          shouldGenerateNomor = approvedRolesSet.has('PN') && approvedRolesSet.has('QA');
-        } else if (isPrecursorForNomor) {
-          // Pure Precursor/OOT: generate after any APJ approve (step_level 2)
-          shouldGenerateNomor = permohonan.CurrentStep.step_level === 2;
-        } else {
-          // Standard / Recall: generate after Dept Manager approve (step_level 1)
-          shouldGenerateNomor = permohonan.CurrentStep.step_level === 1;
-        }
-
-        if (shouldGenerateNomor) {
-          try {
-            nomorPermohonan = await generateNomorPermohonan(permohonan.bentuk_limbah, transaction);
-            permohonan.nomor_permohonan = nomorPermohonan;
-            
-            // Log the nomor_permohonan generation
-            await logChanges(
-              req, 'UPDATE', permohonan.request_id,
-              [{ field: 'nomor_permohonan', old: null, new: nomorPermohonan }],
-              transaction
-            );
-          } catch (nomorError) {
-            await transaction.rollback();
-            console.error("Failed to generate nomor_permohonan:", nomorError);
-            console.error("Permohonan data:", JSON.stringify(permohonan.toJSON(), null, 2));
-            
-            // Handle race condition - ask user to resubmit
-            if (nomorError.message.includes('limit exceeded') || nomorError.message.includes('already exists')) {
-              return res.status(409).json({ 
-                message: 'Unable to generate request number due to system constraints. Please cancel this request and resubmit.',
-                error: 'REQUEST_NUMBER_CONFLICT'
-              });
-            }
-            
-            return res.status(500).json({ message: "Error generating request number", error: nomorError.message });
-          }
-        }
-      }
-
-      // 4. Record the approval in the history table
-      // For Verifikasi Lapangan (step_level === 3) we support 4 distinct roles
-      // (pelaksana pemohon, supervisor pemohon, pelaksana hse, supervisor hse).
-      // Frontend passes `roleId` in payload when performing a verification approval.
-      const roleId = req.body.roleId || null;
-
-      // If this is a verification step, ensure the same role can't approve twice.
-      const currentStepLevel = permohonan.CurrentStep.step_level;
-
-      if (currentStepLevel === 3 && roleId) {
-        // Check if an ApprovalHistory entry already exists for this request + step + role
+      // Check if this APJ role has already approved
+      if (apjRole) {
         const existing = await ApprovalHistory.findOne({
           where: {
             request_id: permohonan.request_id,
             step_id: permohonan.current_step_id,
-            approver_jabatan: { [require('sequelize').Op.like]: `%VERIF_ROLE:${roleId}%` },
+            approver_jabatan: { [require('sequelize').Op.like]: `%APJ_ROLE:${apjRole}%` },
             status: 'Approved'
           },
           transaction
         });
 
         if (existing) {
-          // Duplicate approval for same role - treat as idempotent success
+          // Duplicate approval for same APJ role - treat as idempotent success
           await transaction.commit();
-          return res.status(200).json({ message: 'Role already approved previously.', data: permohonan });
+          return res.status(200).json({ message: 'APJ role already approved previously.', data: permohonan });
         }
       }
+    }
 
-      // Determine APJ role for step level 2 (APJ approval)
-      let apjRole = null;
-      if (currentStepLevel === 2) {
-        try {
-          // Get approver's department from external API
-          const axios = require('axios');
-          const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
-          const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
-          const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
-          const apjItems = items.filter(i => 
-            String(i.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah' && 
-            Number(i.Appr_No) === 2
-          );
-          
-          const userApj = apjItems.find(item => String(item.Appr_ID) === String(verifierId));
-          if (userApj && userApj.Appr_DeptID) {
-            const dept = String(userApj.Appr_DeptID).toUpperCase();
-            if (dept === 'PN1') apjRole = 'PN';
-            else if (dept === 'QA') apjRole = 'QA';
-            else if (dept === 'PC') apjRole = 'PC';
-          }
-        } catch (apjErr) {
-          console.warn('[approvePermohonan] Failed to determine APJ role:', apjErr.message);
-        }
-
-        // Check if this APJ role has already approved
-        if (apjRole) {
-          const existing = await ApprovalHistory.findOne({
-            where: {
-              request_id: permohonan.request_id,
-              step_id: permohonan.current_step_id,
-              approver_jabatan: { [require('sequelize').Op.like]: `%APJ_ROLE:${apjRole}%` },
-              status: 'Approved'
-            },
-            transaction
-          });
-
-          if (existing) {
-            // Duplicate approval for same APJ role - treat as idempotent success
-            await transaction.commit();
-            return res.status(200).json({ message: 'APJ role already approved previously.', data: permohonan });
-          }
-        }
-      }
-      
-      // Check for duplicate APJ department approvals in step 2
-      if (currentStepLevel === 2) {
-        // Get approver's department from external API
-        let approverDept = null;
-        try {
-          const axios = require('axios');
-          const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
-          const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
-          const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
-          const userApprovals = items.filter(item => 
-            String(item.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah' &&
-            String(item.Appr_ID) === String(verifierId) &&
-            Number(item.Appr_No) === 2
-          );
-          
-          if (userApprovals.length > 0) {
-            approverDept = String(userApprovals[0].Appr_DeptID || '').toUpperCase();
-          }
-        } catch (extErr) {
-          console.warn('[approvePermohonan] Failed to get approver department for duplicate check:', extErr.message);
-        }
-
-        if (approverDept) {
-          // Check if this department has already approved this step
-          const histories = await ApprovalHistory.findAll({
-            where: {
-              request_id: permohonan.request_id,
-              step_id: permohonan.current_step_id,
-              status: 'Approved'
-            },
-            transaction
-          });
-
-          // Check if any existing approval is from the same department
-          for (const history of histories) {
-            const historyApproverId = history.approver_id || history.approver_id_delegated;
-            try {
-              const axios = require('axios');
-              const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
-              const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
-              const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
-              const historyApproverData = items.find(item => 
-                String(item.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah' &&
-                String(item.Appr_ID) === String(historyApproverId) &&
-                Number(item.Appr_No) === 2
-              );
-              
-              if (historyApproverData && String(historyApproverData.Appr_DeptID || '').toUpperCase() === approverDept) {
-                // Same department has already approved
-                await transaction.commit();
-                return res.status(200).json({ 
-                  message: `APJ ${approverDept} department has already approved this request.`, 
-                  data: permohonan 
-                });
-              }
-            } catch (dupCheckErr) {
-              console.warn('[approvePermohonan] Error in duplicate APJ department check:', dupCheckErr.message);
-            }
-          }
-        }
-      }
-
-      // Build approver_jabatan to include role marker so we can reconstruct per-role approvals
-      let approverJabatanSnapshot = req.body.verifierJabatan || user.Jabatan || null;
-      if (currentStepLevel === 3 && roleId) {
-        approverJabatanSnapshot = `${approverJabatanSnapshot || ''} VERIF_ROLE:${roleId}`.trim();
-      } else if (currentStepLevel === 2 && apjRole) {
-        approverJabatanSnapshot = `${approverJabatanSnapshot || ''} APJ_ROLE:${apjRole}`.trim();
-      }
-
-      // For Verifikasi Lapangan (step_level === 3) the approver is signing as themselves
-      // (they authenticate inside the modal). Ensure any delegated snapshot fields are NULL
-      // so generated docs and UI show the approver as themselves rather than 'a.n.' delegation.
-      const isVerificationStepCreate = permohonan.CurrentStep && permohonan.CurrentStep.step_level === 3;
-
-      await ApprovalHistory.create({
-        request_id: permohonan.request_id,
-        step_id: permohonan.current_step_id,
-        status: 'Approved',
-        comments: req.body.comments || 'Approved',
-        // Snapshot the user who approved - prefer verifierId when provided
-        approver_id: verifierId,
-        approver_name: req.body.verifierName || user.Nama,
-        approver_jabatan: approverJabatanSnapshot,
-        // For verification step, do NOT record delegated approver snapshot (they are signing as themselves)
-        approver_id_delegated: isVerificationStepCreate ? null : (delegatedUser ? delegatedUser.log_NIK : null),
-        approver_name_delegated: isVerificationStepCreate ? null : (delegatedUser ? delegatedUser.Nama : null),
-        approver_jabatan_delegated: isVerificationStepCreate ? null : (delegatedUser ? delegatedUser.Jabatan : null),
-      }, { transaction });
-
-      // --- Check if this is HSE Manager step - but DON'T auto-complete
-      // Let the normal workflow flow handle completion when there are no more steps
-      // This fixes the auto-approve issue where HSE Manager approval immediately completed the request
-      let isHSEManagerStep = false;
+    // Check for duplicate APJ department approvals in step 2
+    if (currentStepLevel === 2) {
+      // Get approver's department from external API
+      let approverDept = null;
       try {
         const axios = require('axios');
         const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
         const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
         const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
-        const matches = items.filter(i => String(i.Appr_ID) === String(verifierId));
-        isHSEManagerStep = matches.some(m => Number(m.Appr_No) === 4 && String((m.Appr_DeptID || '').toUpperCase()) === 'KL');
+        const userApprovals = items.filter(item =>
+          String(item.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah' &&
+          String(item.Appr_ID) === String(verifierId) &&
+          Number(item.Appr_No) === 2
+        );
+
+        if (userApprovals.length > 0) {
+          approverDept = String(userApprovals[0].Appr_DeptID || '').toUpperCase();
+        }
       } catch (extErr) {
-        // External API failed - fallback: check if current step is HSE Manager based on step name
-        const currentStepName = permohonan.CurrentStep && permohonan.CurrentStep.step_name;
-        isHSEManagerStep = currentStepName === 'HSE Manager';
-        console.warn('[approvePermohonan] External approval API failed, using step name fallback:', extErr && extErr.message);
+        console.warn('[approvePermohonan] Failed to get approver department for duplicate check:', extErr.message);
       }
-  
-      // 5. Find the next step in the workflow
-      // Use the next greater step_level (min step_level > current) so that
-      // appended verification steps at higher levels are respected and we
-      // don't assume contiguous numbering.
-      // Special rule: If the current step is Manager (step_level === 1)
-      // and the request's golongan is NOT Prekursor / OOT nor Recall,
-      // skip the APJ step (step_level === 2) and advance directly to the
-      // next non-APJ step (typically Verifikasi Lapangan, step_level 3).
-      const Op = require('sequelize').Op;
 
-      // Determine golongan category name for this request
-      const golongan = await GolonganLimbah.findByPk(permohonan.golongan_limbah_id, { transaction });
-      const categoryName = (golongan && golongan.nama) ? String(golongan.nama).toLowerCase() : '';
-      const isPrecursor = categoryName.includes('prekursor') || categoryName.includes('oot');
-      const isRecall = categoryName.includes('recall');
-      const isRecallPrecursor = categoryName.includes('recall') && categoryName.includes('prekursor');
-
-      let nextStep;
-      if (permohonan.CurrentStep.step_level === 1 && !isPrecursor && !isRecall && !isRecallPrecursor) {
-        // For Standard workflow: Skip APJ (step level 2) and go directly to Verifikasi Lapangan (step level 3)
-        nextStep = await ApprovalWorkflowStep.findOne({
+      if (approverDept) {
+        // Check if this department has already approved this step
+        const histories = await ApprovalHistory.findAll({
           where: {
-            approval_workflow_id: permohonan.approval_workflow_id,
-            [Op.and]: [
-              { step_level: { [Op.gt]: permohonan.CurrentStep.step_level } },
-              { step_level: { [Op.ne]: 2 } }
-            ]
+            request_id: permohonan.request_id,
+            step_id: permohonan.current_step_id,
+            status: 'Approved'
           },
-          order: [['step_level', 'ASC']],
           transaction
         });
-      } else {
-        nextStep = await ApprovalWorkflowStep.findOne({
-          where: {
-            approval_workflow_id: permohonan.approval_workflow_id,
-            step_level: {
-              [Op.gt]: permohonan.CurrentStep.step_level
+
+        // Check if any existing approval is from the same department
+        for (const history of histories) {
+          const historyApproverId = history.approver_id || history.approver_id_delegated;
+          try {
+            const axios = require('axios');
+            const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
+            const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
+            const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
+            const historyApproverData = items.find(item =>
+              String(item.Appr_ApplicationCode || '') === 'ePengelolaan_Limbah' &&
+              String(item.Appr_ID) === String(historyApproverId) &&
+              Number(item.Appr_No) === 2
+            );
+
+            if (historyApproverData && String(historyApproverData.Appr_DeptID || '').toUpperCase() === approverDept) {
+              // Same department has already approved
+              await transaction.commit();
+              return res.status(200).json({
+                message: `APJ ${approverDept} department has already approved this request.`,
+                data: permohonan
+              });
             }
-          },
-          order: [['step_level', 'ASC']],
-          transaction
-        });
+          } catch (dupCheckErr) {
+            console.warn('[approvePermohonan] Error in duplicate APJ department check:', dupCheckErr.message);
+          }
+        }
       }
-  
-      // 6. Update the permohonan to the next step
-      // Special handling for steps that require multiple parallel approvals:
-      // - Step 2 (APJ): May require multiple departments (PN1, QA, HC) for complex scenarios
-      // - Step 3 (Verification): Requires all 4 verification roles
-      
-      // Check if all required approvals for this step are complete
-      // Use required_approvals from database if available, otherwise use dynamic computation
-      let requiredApprovals = 1;
-      if (permohonan.CurrentStep && typeof permohonan.CurrentStep.required_approvals !== 'undefined' && permohonan.CurrentStep.required_approvals !== null) {
-        requiredApprovals = permohonan.CurrentStep.required_approvals || 1;
-      }
+    }
 
-      const histories = await ApprovalHistory.findAll({
+    // Build approver_jabatan to include role marker so we can reconstruct per-role approvals
+    let approverJabatanSnapshot = req.body.verifierJabatan || user.Jabatan || null;
+    if (currentStepLevel === 3 && roleId) {
+      approverJabatanSnapshot = `${approverJabatanSnapshot || ''} VERIF_ROLE:${roleId}`.trim();
+    } else if (currentStepLevel === 2 && apjRole) {
+      approverJabatanSnapshot = `${approverJabatanSnapshot || ''} APJ_ROLE:${apjRole}`.trim();
+    }
+
+    // For Verifikasi Lapangan (step_level === 3) the approver is signing as themselves
+    // (they authenticate inside the modal). Ensure any delegated snapshot fields are NULL
+    // so generated docs and UI show the approver as themselves rather than 'a.n.' delegation.
+    const isVerificationStepCreate = permohonan.CurrentStep && permohonan.CurrentStep.step_level === 3;
+
+    await ApprovalHistory.create({
+      request_id: permohonan.request_id,
+      step_id: permohonan.current_step_id,
+      status: 'Approved',
+      comments: req.body.comments || 'Approved',
+      // Snapshot the user who approved - prefer verifierId when provided
+      approver_id: verifierId,
+      approver_name: req.body.verifierName || user.Nama,
+      approver_jabatan: approverJabatanSnapshot,
+      // For verification step, do NOT record delegated approver snapshot (they are signing as themselves)
+      approver_id_delegated: isVerificationStepCreate ? null : (delegatedUser ? delegatedUser.log_NIK : null),
+      approver_name_delegated: isVerificationStepCreate ? null : (delegatedUser ? delegatedUser.Nama : null),
+      approver_jabatan_delegated: isVerificationStepCreate ? null : (delegatedUser ? delegatedUser.Jabatan : null),
+    }, { transaction });
+
+    // --- Check if this is HSE Manager step - but DON'T auto-complete
+    // Let the normal workflow flow handle completion when there are no more steps
+    // This fixes the auto-approve issue where HSE Manager approval immediately completed the request
+    let isHSEManagerStep = false;
+    try {
+      const axios = require('axios');
+      const EXTERNAL_APPROVAL_URL = process.env.EXTERNAL_APPROVAL_URL;
+      const externalRes = await axios.get(EXTERNAL_APPROVAL_URL);
+      const items = Array.isArray(externalRes.data) ? externalRes.data : externalRes.data?.data || [];
+      const matches = items.filter(i => String(i.Appr_ID) === String(verifierId));
+      isHSEManagerStep = matches.some(m => Number(m.Appr_No) === 4 && String((m.Appr_DeptID || '').toUpperCase()) === 'KL');
+    } catch (extErr) {
+      // External API failed - fallback: check if current step is HSE Manager based on step name
+      const currentStepName = permohonan.CurrentStep && permohonan.CurrentStep.step_name;
+      isHSEManagerStep = currentStepName === 'HSE Manager';
+      console.warn('[approvePermohonan] External approval API failed, using step name fallback:', extErr && extErr.message);
+    }
+
+    // 5. Find the next step in the workflow
+    // Use the next greater step_level (min step_level > current) so that
+    // appended verification steps at higher levels are respected and we
+    // don't assume contiguous numbering.
+    // Special rule: If the current step is Manager (step_level === 1)
+    // and the request's golongan is NOT Prekursor / OOT nor Recall,
+    // skip the APJ step (step_level === 2) and advance directly to the
+    // next non-APJ step (typically Verifikasi Lapangan, step_level 3).
+    const Op = require('sequelize').Op;
+
+    // Determine golongan category name for this request
+    const golongan = await GolonganLimbah.findByPk(permohonan.golongan_limbah_id, { transaction });
+    const categoryName = (golongan && golongan.nama) ? String(golongan.nama).toLowerCase() : '';
+    const isPrecursor = categoryName.includes('prekursor') || categoryName.includes('oot');
+    const isRecall = categoryName.includes('recall');
+    const isRecallPrecursor = categoryName.includes('recall') && categoryName.includes('prekursor');
+
+    let nextStep;
+    if (permohonan.CurrentStep.step_level === 1 && !isPrecursor && !isRecall && !isRecallPrecursor) {
+      // For Standard workflow: Skip APJ (step level 2) and go directly to Verifikasi Lapangan (step level 3)
+      nextStep = await ApprovalWorkflowStep.findOne({
         where: {
-          request_id: permohonan.request_id,
-          step_id: permohonan.current_step_id,
-          status: 'Approved'
+          approval_workflow_id: permohonan.approval_workflow_id,
+          [Op.and]: [
+            { step_level: { [Op.gt]: permohonan.CurrentStep.step_level } },
+            { step_level: { [Op.ne]: 2 } }
+          ]
         },
+        order: [['step_level', 'ASC']],
         transaction
       });
-
-      if (permohonan.CurrentStep.step_level === 2) {
-        // APJ step: Check which APJ roles have approved using APJ_ROLE markers
-        const approvedApjRoles = new Set();
-        histories.forEach(h => {
-          const jab = h.approver_jabatan || '';
-          const m = jab.match(/APJ_ROLE:(\w+)/);
-          if (m && m[1]) approvedApjRoles.add(m[1]);
-        });
-
-        // Determine required APJ roles based on golongan and isProdukPangan
-        let requiredApjRoles = [];
-        try {
-          const golongan = await GolonganLimbah.findByPk(permohonan.golongan_limbah_id);
-          const categoryName = (golongan && golongan.nama) ? String(golongan.nama).toLowerCase() : '';
-          const isPrecursor = categoryName.includes('prekursor') || categoryName.includes('oot');
-          const isRecall = categoryName.includes('recall');
-          const isRecallPrecursor = categoryName.includes('recall') && categoryName.includes('prekursor');
-          const isProdukPangan = permohonan.is_produk_pangan === true;
-
-          if (isRecallPrecursor) {
-            // Recall & Precursor: need APJ PN and APJ QA
-            requiredApjRoles = ['PN', 'QA'];
-          } else if (isPrecursor) {
-            // Pure Precursor: need APJ PN only
-            requiredApjRoles = ['PN'];
-          } else if (isRecall) {
-            // Pure Recall: need APJ QA, plus PC if produk pangan
-            if (isProdukPangan) {
-              requiredApjRoles = ['QA', 'PC'];
-            } else {
-              requiredApjRoles = ['QA'];
-            }
+    } else {
+      nextStep = await ApprovalWorkflowStep.findOne({
+        where: {
+          approval_workflow_id: permohonan.approval_workflow_id,
+          step_level: {
+            [Op.gt]: permohonan.CurrentStep.step_level
           }
-        } catch (gErr) {
-          console.warn('[approvePermohonan] Failed to determine required APJ roles:', gErr && gErr.message);
-        }
-
-        // Check if all required APJ roles have approved
-        const allApjRolesApproved = requiredApjRoles.every(role => approvedApjRoles.has(role));
-
-        if (allApjRolesApproved) {
-          permohonan.current_step_id = nextStep ? nextStep.step_id : null;
-          if (!nextStep) permohonan.status = 'Completed';
-        } else {
-          // Keep at same step until all required APJ roles approve
-          permohonan.current_step_id = permohonan.current_step_id;
-          permohonan.status = 'InProgress';
-        }
-      } else if (permohonan.CurrentStep.step_level === 3) {
-        // Verification step: require all 4 verification roles to approve
-        // Extract role markers from approver_jabatan like '... VERIF_ROLE:<id>'
-        const approvedRoles = new Set();
-        histories.forEach(h => {
-          const jab = h.approver_jabatan || '';
-          const m = jab.match(/VERIF_ROLE:(\d+)/);
-          if (m && m[1]) approvedRoles.add(Number(m[1]));
-        });
-
-        // If all 4 roles approved (1..4), then advance; otherwise keep current step
-        const requiredRoles = [1,2,3,4];
-        const allRolesApproved = requiredRoles.every(r => approvedRoles.has(r));
-
-        if (allRolesApproved && histories.length >= requiredApprovals) {
-          permohonan.current_step_id = nextStep ? nextStep.step_id : null;
-          if (!nextStep) permohonan.status = 'Completed';
-        } else {
-          // Keep at same step and don't advance until all roles approve
-          permohonan.current_step_id = permohonan.current_step_id;
-          permohonan.status = 'InProgress';
-        }
-      } else {
-        // Other steps: use count-based approach with required_approvals
-        if (histories.length >= requiredApprovals) {
-          permohonan.current_step_id = nextStep ? nextStep.step_id : null;
-          if (!nextStep) permohonan.status = 'Pembuatan BAP';
-        } else {
-          permohonan.current_step_id = permohonan.current_step_id;
-          permohonan.status = 'InProgress';
-        }
-      }
-
-      await permohonan.save({ transaction });
-      
-      // If everything succeeded, commit the changes
-      await transaction.commit();
-
-      // --- Email notification to step 2 (APJ) approvers (fire-and-forget) ---
-      // Only send when step 1 (Manager) just completed and advanced to step 2 (APJ)
-      try {
-        const previousStepLevel = permohonan.CurrentStep ? permohonan.CurrentStep.step_level : null;
-        const didAdvanceToStep2 = previousStepLevel === 1 && nextStep && nextStep.step_level === 2 && permohonan.current_step_id === nextStep.step_id;
-        if (didAdvanceToStep2) {
-          sendApprovalStep2Notification({
-            permohonan,
-            categoryName,
-            golonganName: golongan ? golongan.nama : '',
-            isProdukPangan: permohonan.is_produk_pangan === true,
-            managerApproverName: req.body.verifierName || user.Nama || verifierId,
-          });
-        }
-      } catch (emailErr) {
-        // Non-fatal: email failure should never affect approval
-        console.error('[approvePermohonan] Email notification error (non-fatal):', emailErr.message);
-      }
-  
-      res.status(200).json({
-        message: `Request approved. ${nextStep ? 'Advanced to next step.' : 'Approval workflow complete.'}`,
-        data: permohonan
+        },
+        order: [['step_level', 'ASC']],
+        transaction
       });
-  
-    } catch (error) {
-      await transaction.rollback();
-      console.error("Failed to approve permohonan:", error);
-      res.status(500).json({ message: "Error approving permohonan", error: error.message });
     }
+
+    // 6. Update the permohonan to the next step
+    // Special handling for steps that require multiple parallel approvals:
+    // - Step 2 (APJ): May require multiple departments (PN1, QA, HC) for complex scenarios
+    // - Step 3 (Verification): Requires all 4 verification roles
+
+    // Check if all required approvals for this step are complete
+    // Use required_approvals from database if available, otherwise use dynamic computation
+    let requiredApprovals = 1;
+    if (permohonan.CurrentStep && typeof permohonan.CurrentStep.required_approvals !== 'undefined' && permohonan.CurrentStep.required_approvals !== null) {
+      requiredApprovals = permohonan.CurrentStep.required_approvals || 1;
+    }
+
+    const histories = await ApprovalHistory.findAll({
+      where: {
+        request_id: permohonan.request_id,
+        step_id: permohonan.current_step_id,
+        status: 'Approved'
+      },
+      transaction
+    });
+
+    if (permohonan.CurrentStep.step_level === 2) {
+      // APJ step: Check which APJ roles have approved using APJ_ROLE markers
+      const approvedApjRoles = new Set();
+      histories.forEach(h => {
+        const jab = h.approver_jabatan || '';
+        const m = jab.match(/APJ_ROLE:(\w+)/);
+        if (m && m[1]) approvedApjRoles.add(m[1]);
+      });
+
+      // Determine required APJ roles based on golongan and isProdukPangan
+      let requiredApjRoles = [];
+      try {
+        const golongan = await GolonganLimbah.findByPk(permohonan.golongan_limbah_id);
+        const categoryName = (golongan && golongan.nama) ? String(golongan.nama).toLowerCase() : '';
+        const isPrecursor = categoryName.includes('prekursor') || categoryName.includes('oot');
+        const isRecall = categoryName.includes('recall');
+        const isRecallPrecursor = categoryName.includes('recall') && categoryName.includes('prekursor');
+        const isProdukPangan = permohonan.is_produk_pangan === true;
+
+        if (isRecallPrecursor) {
+          // Recall & Precursor: need APJ PN and APJ QA
+          requiredApjRoles = ['PN', 'QA'];
+        } else if (isPrecursor) {
+          // Pure Precursor: need APJ PN only
+          requiredApjRoles = ['PN'];
+        } else if (isRecall) {
+          // Pure Recall: need APJ QA, plus PC if produk pangan
+          if (isProdukPangan) {
+            requiredApjRoles = ['QA', 'PC'];
+          } else {
+            requiredApjRoles = ['QA'];
+          }
+        }
+      } catch (gErr) {
+        console.warn('[approvePermohonan] Failed to determine required APJ roles:', gErr && gErr.message);
+      }
+
+      // Check if all required APJ roles have approved
+      const allApjRolesApproved = requiredApjRoles.every(role => approvedApjRoles.has(role));
+
+      if (allApjRolesApproved) {
+        permohonan.current_step_id = nextStep ? nextStep.step_id : null;
+        if (!nextStep) permohonan.status = 'Completed';
+      } else {
+        // Keep at same step until all required APJ roles approve
+        permohonan.current_step_id = permohonan.current_step_id;
+        permohonan.status = 'InProgress';
+      }
+    } else if (permohonan.CurrentStep.step_level === 3) {
+      // Verification step: require all 4 verification roles to approve
+      // Extract role markers from approver_jabatan like '... VERIF_ROLE:<id>'
+      const approvedRoles = new Set();
+      histories.forEach(h => {
+        const jab = h.approver_jabatan || '';
+        const m = jab.match(/VERIF_ROLE:(\d+)/);
+        if (m && m[1]) approvedRoles.add(Number(m[1]));
+      });
+
+      // If all 4 roles approved (1..4), then advance; otherwise keep current step
+      const requiredRoles = [1, 2, 3, 4];
+      const allRolesApproved = requiredRoles.every(r => approvedRoles.has(r));
+
+      if (allRolesApproved && histories.length >= requiredApprovals) {
+        permohonan.current_step_id = nextStep ? nextStep.step_id : null;
+        if (!nextStep) permohonan.status = 'Completed';
+      } else {
+        // Keep at same step and don't advance until all roles approve
+        permohonan.current_step_id = permohonan.current_step_id;
+        permohonan.status = 'InProgress';
+      }
+    } else {
+      // Other steps: use count-based approach with required_approvals
+      if (histories.length >= requiredApprovals) {
+        permohonan.current_step_id = nextStep ? nextStep.step_id : null;
+        if (!nextStep) permohonan.status = 'Pembuatan BAP';
+      } else {
+        permohonan.current_step_id = permohonan.current_step_id;
+        permohonan.status = 'InProgress';
+      }
+    }
+
+    await permohonan.save({ transaction });
+
+    // If everything succeeded, commit the changes
+    await transaction.commit();
+
+    // --- Email notification to step 2 (APJ) approvers (fire-and-forget) ---
+    // Only send when step 1 (Manager) just completed and advanced to step 2 (APJ)
+    try {
+      const previousStepLevel = permohonan.CurrentStep ? permohonan.CurrentStep.step_level : null;
+      const didAdvanceToStep2 = previousStepLevel === 1 && nextStep && nextStep.step_level === 2 && permohonan.current_step_id === nextStep.step_id;
+      if (didAdvanceToStep2) {
+        sendApprovalStep2Notification({
+          permohonan,
+          categoryName,
+          golonganName: golongan ? golongan.nama : '',
+          isProdukPangan: permohonan.is_produk_pangan === true,
+          managerApproverName: req.body.verifierName || user.Nama || verifierId,
+        });
+      }
+    } catch (emailErr) {
+      // Non-fatal: email failure should never affect approval
+      console.error('[approvePermohonan] Email notification error (non-fatal):', emailErr.message);
+    }
+
+    res.status(200).json({
+      message: `Request approved. ${nextStep ? 'Advanced to next step.' : 'Approval workflow complete.'}`,
+      data: permohonan
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error("Failed to approve permohonan:", error);
+    res.status(500).json({ message: "Error approving permohonan", error: error.message });
+  }
 };
 
 /**
@@ -1741,69 +1743,69 @@ const approvePermohonan = async (req, res) => {
  * Handles rejecting a request.
  */
 const rejectPermohonan = async (req, res) => {
-    const transaction = await sequelize.transaction();
+  const transaction = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const { alasan_penolakan } = req.body;
+    const { user, delegatedUser } = req;
+    // Support explicit verifier metadata (when frontend authenticates a different verifier
+    // locally in a modal). If a verifierId is passed in the request body, we'll use it
+    // for the external authorization check (same pattern used in approvePermohonan).
+    const verifierId = req.body?.verifierId || user.log_NIK;
+    const authorizingUser = verifierId === user.log_NIK ? user : { log_NIK: verifierId };
+    const actingUser = delegatedUser || user; // For audit trail - who the action is being performed as
+
+    if (!alasan_penolakan) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'Rejection reason is required.' });
+    }
+
+    const permohonan = await PermohonanPemusnahanLimbah.findByPk(id, {
+      include: [{ model: ApprovalWorkflowStep, as: 'CurrentStep', include: [ApprovalWorkflowApprover] }],
+      transaction
+    });
+
+    if (!permohonan) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'Permohonan not found' });
+    }
+    if (!permohonan.CurrentStep) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'Request is not currently in an approval step.' });
+    }
+
+    // Authorization Check using external API
+    let isApprover = await checkApprovalAuthorization(authorizingUser, permohonan);
+
+    // TEST BYPASS: allow developers to bypass Verifikasi Lapangan authorization when
+    // process.env.TEST_BYPASS_VERIFICATION === 'true' AND a valid token header is provided.
     try {
-        const { id } = req.params;
-        const { alasan_penolakan } = req.body;
-        const { user, delegatedUser } = req;
-        // Support explicit verifier metadata (when frontend authenticates a different verifier
-        // locally in a modal). If a verifierId is passed in the request body, we'll use it
-        // for the external authorization check (same pattern used in approvePermohonan).
-        const verifierId = req.body?.verifierId || user.log_NIK;
-        const authorizingUser = verifierId === user.log_NIK ? user : { log_NIK: verifierId };
-        const actingUser = delegatedUser || user; // For audit trail - who the action is being performed as
-
-        if (!alasan_penolakan) {
-            await transaction.rollback();
-            return res.status(400).json({ message: 'Rejection reason is required.' });
+      const bypassEnabled = String(process.env.TEST_BYPASS_VERIFICATION || '').toLowerCase() === 'true';
+      const bypassToken = process.env.TEST_BYPASS_TOKEN || null;
+      const providedToken = (req.headers['x-test-bypass-token'] || req.headers['X-Test-Bypass-Token'] || '').toString();
+      const isVerificationStep = permohonan.CurrentStep && permohonan.CurrentStep.step_level === 3;
+      if (!isApprover && bypassEnabled && bypassToken && providedToken && isVerificationStep) {
+        if (providedToken === bypassToken) {
+          isApprover = true;
+          req.usedVerificationBypass = true;
+          console.warn('[TEST_BYPASS] Verification bypass used for reject on request', permohonan.request_id, 'by', user && user.log_NIK);
         }
+      }
+    } catch (bypassErr) {
+      console.warn('Error evaluating test bypass for reject:', bypassErr && bypassErr.message);
+    }
 
-        const permohonan = await PermohonanPemusnahanLimbah.findByPk(id, {
-            include: [{ model: ApprovalWorkflowStep, as: 'CurrentStep', include: [ApprovalWorkflowApprover] }],
-            transaction
-        });
-
-        if (!permohonan) {
-            await transaction.rollback();
-            return res.status(404).json({ message: 'Permohonan not found' });
+    if (!isApprover) {
+      await transaction.rollback();
+      return res.status(403).json({
+        message: 'You are not authorized to reject this request.',
+        debug: {
+          userId: authorizingUser.log_NIK,
+          currentStepLevel: permohonan.CurrentStep.step_level,
+          requestDepartment: permohonan.bagian || permohonan.requester_dept_id
         }
-        if (!permohonan.CurrentStep) {
-            await transaction.rollback();
-            return res.status(400).json({ message: 'Request is not currently in an approval step.'});
-        }
-
-        // Authorization Check using external API
-        let isApprover = await checkApprovalAuthorization(authorizingUser, permohonan);
-
-        // TEST BYPASS: allow developers to bypass Verifikasi Lapangan authorization when
-        // process.env.TEST_BYPASS_VERIFICATION === 'true' AND a valid token header is provided.
-        try {
-          const bypassEnabled = String(process.env.TEST_BYPASS_VERIFICATION || '').toLowerCase() === 'true';
-          const bypassToken = process.env.TEST_BYPASS_TOKEN || null;
-          const providedToken = (req.headers['x-test-bypass-token'] || req.headers['X-Test-Bypass-Token'] || '').toString();
-          const isVerificationStep = permohonan.CurrentStep && permohonan.CurrentStep.step_level === 3;
-          if (!isApprover && bypassEnabled && bypassToken && providedToken && isVerificationStep) {
-            if (providedToken === bypassToken) {
-              isApprover = true;
-              req.usedVerificationBypass = true;
-              console.warn('[TEST_BYPASS] Verification bypass used for reject on request', permohonan.request_id, 'by', user && user.log_NIK);
-            }
-          }
-        } catch (bypassErr) {
-          console.warn('Error evaluating test bypass for reject:', bypassErr && bypassErr.message);
-        }
-
-        if (!isApprover) {
-            await transaction.rollback();
-            return res.status(403).json({ 
-              message: 'You are not authorized to reject this request.',
-              debug: {
-                userId: authorizingUser.log_NIK,
-                currentStepLevel: permohonan.CurrentStep.step_level,
-                requestDepartment: permohonan.bagian || permohonan.requester_dept_id
-              }
-            });
-        }
+      });
+    }
 
     // Record the rejection in history. Prefer explicit verifier metadata when provided
     // so that modal-authenticated verifiers are recorded correctly.
@@ -1823,112 +1825,112 @@ const rejectPermohonan = async (req, res) => {
       approver_jabatan_delegated: isVerificationStepReject ? null : (delegatedUser ? delegatedUser.Jabatan : null),
     }, { transaction });
 
-        // Determine behavior based on current step level
-        const currentStepLevel = permohonan.CurrentStep.step_level;
-        
-        if (currentStepLevel === 1) {
-            // Manager rejection: Return to draft for pemohon to edit
-            permohonan.current_step_id = null;
-            permohonan.status = 'Draft';
-            permohonan.alasan_penolakan = alasan_penolakan;
-            await permohonan.save({ transaction });
-            await transaction.commit();
-            return res.status(200).json({
-                message: 'Request rejected and returned to draft for revision.',
-                data: permohonan
-            });
-        } else if (currentStepLevel === 3) {
-            // Verifikasi Lapangan rejection: permanently reject the original,
-            // then create a new draft pre-filled with the same data and rejection reason
-            // so the requester can revise without re-entering everything.
-            permohonan.current_step_id = null;
-            permohonan.status = 'Rejected';
-            permohonan.alasan_penolakan = alasan_penolakan;
-            await permohonan.save({ transaction });
+    // Determine behavior based on current step level
+    const currentStepLevel = permohonan.CurrentStep.step_level;
 
-            // Load the original detail items
-            const originalDetails = await DetailLimbah.findAll({
-                where: { request_id: permohonan.request_id },
-                transaction
-            });
+    if (currentStepLevel === 1) {
+      // Manager rejection: Return to draft for pemohon to edit
+      permohonan.current_step_id = null;
+      permohonan.status = 'Draft';
+      permohonan.alasan_penolakan = alasan_penolakan;
+      await permohonan.save({ transaction });
+      await transaction.commit();
+      return res.status(200).json({
+        message: 'Request rejected and returned to draft for revision.',
+        data: permohonan
+      });
+    } else if (currentStepLevel === 3) {
+      // Verifikasi Lapangan rejection: permanently reject the original,
+      // then create a new draft pre-filled with the same data and rejection reason
+      // so the requester can revise without re-entering everything.
+      permohonan.current_step_id = null;
+      permohonan.status = 'Rejected';
+      permohonan.alasan_penolakan = alasan_penolakan;
+      await permohonan.save({ transaction });
 
-            // Create a new draft from the rejected permohonan.
-            // Prefix alasan_penolakan with 'Reject Verifikasi - ' so the frontend
-            // can reliably distinguish this draft from a manager-returned draft.
-            const newDraft = await PermohonanPemusnahanLimbah.create({
-                bagian: permohonan.bagian,
-                bentuk_limbah: permohonan.bentuk_limbah,
-                golongan_limbah_id: permohonan.golongan_limbah_id,
-                jenis_limbah_b3_id: permohonan.jenis_limbah_b3_id,
-                is_produk_pangan: permohonan.is_produk_pangan,
-                approval_workflow_id: permohonan.approval_workflow_id,
-                current_step_id: null,
-                status: 'Draft',
-                alasan_penolakan: `Reject Verifikasi - ${permohonan.nomorPermohonan}, ${alasan_penolakan}`,
-                requester_id: permohonan.requester_id,
-                requester_name: permohonan.requester_name,
-                requester_jabatan: permohonan.requester_jabatan,
-                requester_dept_id: permohonan.requester_dept_id,
-                requester_job_level_id: permohonan.requester_job_level_id,
-                requester_id_delegated: permohonan.requester_id_delegated,
-                requester_name_delegated: permohonan.requester_name_delegated,
-                requester_jabatan_delegated: permohonan.requester_jabatan_delegated,
-                requester_dept_id_delegated: permohonan.requester_dept_id_delegated,
-                requester_job_level_id_delegated: permohonan.requester_job_level_id_delegated,
-                jumlah_item: originalDetails.length,
-                // nomor_permohonan intentionally omitted – will be generated on re-submit
-            }, { transaction });
+      // Load the original detail items
+      const originalDetails = await DetailLimbah.findAll({
+        where: { request_id: permohonan.request_id },
+        transaction
+      });
 
-            // Copy all detail limbah items to the new draft
-            if (originalDetails.length > 0) {
-                await DetailLimbah.bulkCreate(
-                    originalDetails.map(d => ({
-                        request_id: newDraft.request_id,
-                        nama_limbah: d.nama_limbah,
-                        nomor_analisa: d.nomor_analisa,
-                        nomor_referensi: d.nomor_referensi,
-                        nomor_wadah: d.nomor_wadah,
-                        jumlah_barang: d.jumlah_barang,
-                        satuan: d.satuan,
-                        bobot: d.bobot,
-                        alasan_pemusnahan: d.alasan_pemusnahan,
-                    })),
-                    { transaction }
-                );
-            }
+      // Create a new draft from the rejected permohonan.
+      // Prefix alasan_penolakan with 'Reject Verifikasi - ' so the frontend
+      // can reliably distinguish this draft from a manager-returned draft.
+      const newDraft = await PermohonanPemusnahanLimbah.create({
+        bagian: permohonan.bagian,
+        bentuk_limbah: permohonan.bentuk_limbah,
+        golongan_limbah_id: permohonan.golongan_limbah_id,
+        jenis_limbah_b3_id: permohonan.jenis_limbah_b3_id,
+        is_produk_pangan: permohonan.is_produk_pangan,
+        approval_workflow_id: permohonan.approval_workflow_id,
+        current_step_id: null,
+        status: 'Draft',
+        alasan_penolakan: `Reject Verifikasi - ${permohonan.nomorPermohonan}, ${alasan_penolakan}`,
+        requester_id: permohonan.requester_id,
+        requester_name: permohonan.requester_name,
+        requester_jabatan: permohonan.requester_jabatan,
+        requester_dept_id: permohonan.requester_dept_id,
+        requester_job_level_id: permohonan.requester_job_level_id,
+        requester_id_delegated: permohonan.requester_id_delegated,
+        requester_name_delegated: permohonan.requester_name_delegated,
+        requester_jabatan_delegated: permohonan.requester_jabatan_delegated,
+        requester_dept_id_delegated: permohonan.requester_dept_id_delegated,
+        requester_job_level_id_delegated: permohonan.requester_job_level_id_delegated,
+        jumlah_item: originalDetails.length,
+        // nomor_permohonan intentionally omitted – will be generated on re-submit
+      }, { transaction });
 
-            // Audit log: record that the new draft was created from a rejected verifikasi lapangan
-            await logChanges(
-                req, 'ADD_ITEM', newDraft.request_id,
-                [{ field: 'request', old: null, new: `Draft baru dibuat dari permohonan #${permohonan.request_id} (ditolak saat Verifikasi Lapangan)` }],
-                transaction
-            );
+      // Copy all detail limbah items to the new draft
+      if (originalDetails.length > 0) {
+        await DetailLimbah.bulkCreate(
+          originalDetails.map(d => ({
+            request_id: newDraft.request_id,
+            nama_limbah: d.nama_limbah,
+            nomor_analisa: d.nomor_analisa,
+            nomor_referensi: d.nomor_referensi,
+            nomor_wadah: d.nomor_wadah,
+            jumlah_barang: d.jumlah_barang,
+            satuan: d.satuan,
+            bobot: d.bobot,
+            alasan_pemusnahan: d.alasan_pemusnahan,
+          })),
+          { transaction }
+        );
+      }
 
-            await transaction.commit();
+      // Audit log: record that the new draft was created from a rejected verifikasi lapangan
+      await logChanges(
+        req, 'ADD_ITEM', newDraft.request_id,
+        [{ field: 'request', old: null, new: `Draft baru dibuat dari permohonan #${permohonan.request_id} (ditolak saat Verifikasi Lapangan)` }],
+        transaction
+      );
 
-            return res.status(200).json({
-                message: 'Permohonan ditolak saat Verifikasi Lapangan. Draft baru telah dibuat untuk revisi.',
-                data: permohonan,
-                newDraft: newDraft
-            });
-        } else {
-            // HSE or other level rejection: Final rejection
-            permohonan.current_step_id = null;
-            permohonan.status = 'Rejected';
-            permohonan.alasan_penolakan = alasan_penolakan;
-        }
-        
-        await permohonan.save({ transaction });
+      await transaction.commit();
 
-        await transaction.commit();
-            
-        res.status(200).json({ message: 'Request has been permanently rejected.', data: permohonan });
-
-    } catch (error) {
-        await transaction.rollback();
-        console.error("Failed to reject permohonan:", error);
-        res.status(500).json({ message: "Error rejecting permohonan", error: error.message });
+      return res.status(200).json({
+        message: 'Permohonan ditolak saat Verifikasi Lapangan. Draft baru telah dibuat untuk revisi.',
+        data: permohonan,
+        newDraft: newDraft
+      });
+    } else {
+      // HSE or other level rejection: Final rejection
+      permohonan.current_step_id = null;
+      permohonan.status = 'Rejected';
+      permohonan.alasan_penolakan = alasan_penolakan;
     }
+
+    await permohonan.save({ transaction });
+
+    await transaction.commit();
+
+    res.status(200).json({ message: 'Request has been permanently rejected.', data: permohonan });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error("Failed to reject permohonan:", error);
+    res.status(500).json({ message: "Error rejecting permohonan", error: error.message });
+  }
 };
 
 /**
@@ -1940,126 +1942,126 @@ const rejectPermohonan = async (req, res) => {
  * All changes are logged to the audit table.
  */
 const updatePermohonan = async (req, res) => {
-    const transaction = await sequelize.transaction();
-    try {
-        const { id } = req.params;
-        const updatedData = req.body;
-        const { user, delegatedUser } = req;
-        const actingUser = delegatedUser || user;
+  const transaction = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const updatedData = req.body;
+    const { user, delegatedUser } = req;
+    const actingUser = delegatedUser || user;
 
-        const permohonan = await PermohonanPemusnahanLimbah.findByPk(id, {
-            include: [
-                { model: DetailLimbah },
-                { model: ApprovalWorkflowStep, as: 'CurrentStep', include: [ApprovalWorkflowApprover] }
-            ],
-            transaction
-        });
+    const permohonan = await PermohonanPemusnahanLimbah.findByPk(id, {
+      include: [
+        { model: DetailLimbah },
+        { model: ApprovalWorkflowStep, as: 'CurrentStep', include: [ApprovalWorkflowApprover] }
+      ],
+      transaction
+    });
 
-        if (!permohonan) {
-            await transaction.rollback();
-            return res.status(404).json({ message: 'Permohonan not found' });
-        }
-
-        // Prevent editing permanently rejected requests (rejected by HSE or higher)
-        if (permohonan.status === 'Rejected') {
-            await transaction.rollback();
-            return res.status(403).json({ message: 'Permanently rejected requests cannot be edited. Please create a new request.' });
-        }
-
-        // Authorization Logic
-        let isAuthorized = false;
-        const isDraft = permohonan.status === 'Draft';
-        const isManagerStep = permohonan.CurrentStep && permohonan.CurrentStep.step_level === 1;
-
-        // Allow anyone in the same department to edit a Draft (including Drafts returned from manager rejection).
-        // Explicit delegation also grants edit permission regardless of dept.
-        const isSameDeptEdit = permohonan.bagian && actingUser.emp_DeptID &&
-          String(permohonan.bagian).toUpperCase() === String(actingUser.emp_DeptID).toUpperCase();
-        const isDelegatedEdit = permohonan.requester_id_delegated === actingUser.log_NIK;
-
-        if (isDraft && (isSameDeptEdit || isDelegatedEdit)) {
-          isAuthorized = true;
-        } 
-        // Allow manager to edit at first approval step - use external API authorization
-        else if (isManagerStep) {
-            // Use the same external API authorization logic for editing permissions
-            isAuthorized = await checkApprovalAuthorization(actingUser, permohonan);
-        }
-
-        if (!isAuthorized) {
-            await transaction.rollback();
-            return res.status(403).json({ message: 'You are not authorized to edit this request at its current stage.' });
-        }
-        
-        // --- Track Changes for Audit Logging ---
-        const changes = [];
-        const mainFields = ['bagian', 'bentuk_limbah', 'golongan_limbah_id', 'jenis_limbah_b3_id', 'is_produk_pangan'];
-
-        mainFields.forEach(field => {
-            if (updatedData[field] !== undefined && String(permohonan[field]) !== String(updatedData[field])) {
-                changes.push({
-                    field: field,
-                    old: permohonan[field],
-                    new: updatedData[field]
-                });
-            }
-        });
-
-        // --- Perform Updates ---
-        await permohonan.update(updatedData, { transaction });
-
-        // --- Update Detail Limbah if provided ---
-        if (updatedData.details && Array.isArray(updatedData.details)) {
-            // Remove existing details
-            const deletedCount = await DetailLimbah.destroy({ 
-                where: { request_id: id }, 
-                transaction 
-            });
-
-            // Insert new details
-            const detailItems = updatedData.details.map(detail => ({ 
-                ...detail, 
-                request_id: parseInt(id) 
-            }));
-            
-            const createdDetails = await DetailLimbah.bulkCreate(detailItems, { transaction });
-
-            // Recompute jumlah_item as total number of detail/lampiran rows
-            try {
-              permohonan.jumlah_item = (updatedData.details || []).length;
-              await permohonan.save({ transaction });
-            } catch (e) {
-              console.warn('[updatePermohonan] Failed to compute jumlah_item:', e && e.message);
-            }
-
-            // Log detail changes
-            changes.push({
-                field: 'details',
-                old: `${permohonan.DetailLimbahs?.length || 0} items`,
-                new: `${updatedData.details.length} items`
-            });
-        }
-        
-        // --- Log the changes ---
-        await logChanges(req, 'UPDATE', id, changes, transaction);
-        
-        await transaction.commit();
-        
-        // Fetch updated data to return
-        const updatedPermohonan = await PermohonanPemusnahanLimbah.findByPk(id, {
-            include: [{ model: DetailLimbah }]
-        });
-        
-        res.status(200).json({ 
-            message: 'Request updated successfully.',
-            data: updatedPermohonan
-        });
-
-    } catch (error) {
-        await transaction.rollback();
-        console.error("Failed to update permohonan:", error);
-        res.status(500).json({ message: "Error updating permohonan", error: error.message });
+    if (!permohonan) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'Permohonan not found' });
     }
+
+    // Prevent editing permanently rejected requests (rejected by HSE or higher)
+    if (permohonan.status === 'Rejected') {
+      await transaction.rollback();
+      return res.status(403).json({ message: 'Permanently rejected requests cannot be edited. Please create a new request.' });
+    }
+
+    // Authorization Logic
+    let isAuthorized = false;
+    const isDraft = permohonan.status === 'Draft';
+    const isManagerStep = permohonan.CurrentStep && permohonan.CurrentStep.step_level === 1;
+
+    // Allow anyone in the same department to edit a Draft (including Drafts returned from manager rejection).
+    // Explicit delegation also grants edit permission regardless of dept.
+    const isSameDeptEdit = permohonan.bagian && actingUser.emp_DeptID &&
+      String(permohonan.bagian).toUpperCase() === String(actingUser.emp_DeptID).toUpperCase();
+    const isDelegatedEdit = permohonan.requester_id_delegated === actingUser.log_NIK;
+
+    if (isDraft && (isSameDeptEdit || isDelegatedEdit)) {
+      isAuthorized = true;
+    }
+    // Allow manager to edit at first approval step - use external API authorization
+    else if (isManagerStep) {
+      // Use the same external API authorization logic for editing permissions
+      isAuthorized = await checkApprovalAuthorization(actingUser, permohonan);
+    }
+
+    if (!isAuthorized) {
+      await transaction.rollback();
+      return res.status(403).json({ message: 'You are not authorized to edit this request at its current stage.' });
+    }
+
+    // --- Track Changes for Audit Logging ---
+    const changes = [];
+    const mainFields = ['bagian', 'bentuk_limbah', 'golongan_limbah_id', 'jenis_limbah_b3_id', 'is_produk_pangan'];
+
+    mainFields.forEach(field => {
+      if (updatedData[field] !== undefined && String(permohonan[field]) !== String(updatedData[field])) {
+        changes.push({
+          field: field,
+          old: permohonan[field],
+          new: updatedData[field]
+        });
+      }
+    });
+
+    // --- Perform Updates ---
+    await permohonan.update(updatedData, { transaction });
+
+    // --- Update Detail Limbah if provided ---
+    if (updatedData.details && Array.isArray(updatedData.details)) {
+      // Remove existing details
+      const deletedCount = await DetailLimbah.destroy({
+        where: { request_id: id },
+        transaction
+      });
+
+      // Insert new details
+      const detailItems = updatedData.details.map(detail => ({
+        ...detail,
+        request_id: parseInt(id)
+      }));
+
+      const createdDetails = await DetailLimbah.bulkCreate(detailItems, { transaction });
+
+      // Recompute jumlah_item as total number of detail/lampiran rows
+      try {
+        permohonan.jumlah_item = (updatedData.details || []).length;
+        await permohonan.save({ transaction });
+      } catch (e) {
+        console.warn('[updatePermohonan] Failed to compute jumlah_item:', e && e.message);
+      }
+
+      // Log detail changes
+      changes.push({
+        field: 'details',
+        old: `${permohonan.DetailLimbahs?.length || 0} items`,
+        new: `${updatedData.details.length} items`
+      });
+    }
+
+    // --- Log the changes ---
+    await logChanges(req, 'UPDATE', id, changes, transaction);
+
+    await transaction.commit();
+
+    // Fetch updated data to return
+    const updatedPermohonan = await PermohonanPemusnahanLimbah.findByPk(id, {
+      include: [{ model: DetailLimbah }]
+    });
+
+    res.status(200).json({
+      message: 'Request updated successfully.',
+      data: updatedPermohonan
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error("Failed to update permohonan:", error);
+    res.status(500).json({ message: "Error updating permohonan", error: error.message });
+  }
 };
 
 /**
@@ -2068,70 +2070,70 @@ const updatePermohonan = async (req, res) => {
  * or if it has been rejected.
  */
 const deletePermohonan = async (req, res) => {
-    const transaction = await sequelize.transaction();
-    try {
-        const { id } = req.params;
-        const { user, delegatedUser } = req;
-        console.log("🚀 ~ deletePermohonan ~ user:", user)
-        const actingUser = delegatedUser || user;
+  const transaction = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const { user, delegatedUser } = req;
+    console.log("🚀 ~ deletePermohonan ~ user:", user)
+    const actingUser = delegatedUser || user;
 
-        const permohonan = await PermohonanPemusnahanLimbah.findByPk(id, { transaction });
+    const permohonan = await PermohonanPemusnahanLimbah.findByPk(id, { transaction });
 
-        if (!permohonan) {
-            await transaction.rollback();
-            return res.status(404).json({ message: 'Permohonan not found' });
-        }
-
-        // Authorization: Anyone in the same department as the request can delete a Draft/Rejected.
-        // Explicit delegation also grants permission regardless of dept.
-        const isSameDeptDel = permohonan.bagian && actingUser.emp_DeptID &&
-          String(permohonan.bagian).toUpperCase() === String(actingUser.emp_DeptID).toUpperCase();
-        const isDelegatedDel = permohonan.requester_id_delegated === actingUser.log_NIK;
-        if (!isSameDeptDel && !isDelegatedDel) {
-          await transaction.rollback();
-          return res.status(403).json({ message: 'You are not authorized to delete this request. Only members of the same department can delete.' });
-        }
-
-        // Job level restriction: Job_LevelID >= 7 (operator/pelaksana) cannot delete.
-        // Only Job_LevelID 1-6 (supervisor and above) may delete ajuan.
-        const actingJobLevel = Number(actingUser.Job_LevelID || user.Job_LevelID || 0);
-        if (actingJobLevel >= 7) {
-          await transaction.rollback();
-          return res.status(403).json({ message: 'Your job level does not permit deleting requests. Please ask a supervisor or above to delete.' });
-        }
-        
-        // Allow deletion for drafts (including returned from manager) and permanently rejected requests
-        const isDeletable = permohonan.status === 'Draft' || permohonan.status === 'Rejected';
-        if (!isDeletable) {
-            await transaction.rollback();
-            return res.status(400).json({ message: 'This request cannot be deleted because it is currently in an active workflow.' });
-        }
-        
-        // Log the deletion action before destroying the record
-        await logChanges(
-            req, 'REMOVE_ITEM', permohonan.request_id, 
-            [{ field: 'request', old: `Request ID ${id}`, new: 'Deleted' }],
-            transaction
-        );
-
-        await permohonan.destroy({ transaction });
-        await transaction.commit();
-        res.status(200).json({ message: 'Request has been deleted successfully.' });
-
-    } catch (error) {
-        await transaction.rollback();
-        console.error("Failed to delete permohonan:", error);
-        res.status(500).json({ message: "Error deleting permohonan", error: error.message });
+    if (!permohonan) {
+      await transaction.rollback();
+      return res.status(404).json({ message: 'Permohonan not found' });
     }
+
+    // Authorization: Anyone in the same department as the request can delete a Draft/Rejected.
+    // Explicit delegation also grants permission regardless of dept.
+    const isSameDeptDel = permohonan.bagian && actingUser.emp_DeptID &&
+      String(permohonan.bagian).toUpperCase() === String(actingUser.emp_DeptID).toUpperCase();
+    const isDelegatedDel = permohonan.requester_id_delegated === actingUser.log_NIK;
+    if (!isSameDeptDel && !isDelegatedDel) {
+      await transaction.rollback();
+      return res.status(403).json({ message: 'You are not authorized to delete this request. Only members of the same department can delete.' });
+    }
+
+    // Job level restriction: Job_LevelID >= 7 (operator/pelaksana) cannot delete.
+    // Only Job_LevelID 1-6 (supervisor and above) may delete ajuan.
+    const actingJobLevel = Number(actingUser.Job_LevelID || user.Job_LevelID || 0);
+    if (actingJobLevel >= 7) {
+      await transaction.rollback();
+      return res.status(403).json({ message: 'Your job level does not permit deleting requests. Please ask a supervisor or above to delete.' });
+    }
+
+    // Allow deletion for drafts (including returned from manager) and permanently rejected requests
+    const isDeletable = permohonan.status === 'Draft' || permohonan.status === 'Rejected';
+    if (!isDeletable) {
+      await transaction.rollback();
+      return res.status(400).json({ message: 'This request cannot be deleted because it is currently in an active workflow.' });
+    }
+
+    // Log the deletion action before destroying the record
+    await logChanges(
+      req, 'REMOVE_ITEM', permohonan.request_id,
+      [{ field: 'request', old: `Request ID ${id}`, new: 'Deleted' }],
+      transaction
+    );
+
+    await permohonan.destroy({ transaction });
+    await transaction.commit();
+    res.status(200).json({ message: 'Request has been deleted successfully.' });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error("Failed to delete permohonan:", error);
+    res.status(500).json({ message: "Error deleting permohonan", error: error.message });
+  }
 };
 
 module.exports = {
-    createPermohonan,
-    getAllPermohonan,
-    getPermohonanById,
-    submitPermohonan,
-    approvePermohonan,
-    rejectPermohonan,
-    updatePermohonan,
-    deletePermohonan
+  createPermohonan,
+  getAllPermohonan,
+  getPermohonanById,
+  submitPermohonan,
+  approvePermohonan,
+  rejectPermohonan,
+  updatePermohonan,
+  deletePermohonan
 };
