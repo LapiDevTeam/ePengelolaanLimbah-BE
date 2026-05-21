@@ -133,8 +133,9 @@ exports.getDashboardStats = async (req, res) => {
                     ]
                 });
 
-                // Filter: hide Completed permohonan whose BAP is also Completed (or has no BAP)
+                // Filter: hide Rejected and hide Completed permohonan whose BAP is also Completed (or has no BAP)
                 const visibleRequests = deptRequests.filter(request => {
+                    if (request.status === 'Rejected') return false;
                     if (request.status !== 'Completed') return true;
                     const bapStatus = request.BeritaAcara?.status || null;
                     return bapStatus !== null && bapStatus !== 'Completed';

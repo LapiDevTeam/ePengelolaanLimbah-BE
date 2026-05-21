@@ -305,7 +305,8 @@ const getAllPermohonan = async (req, res) => {
       // Dept. Requests tab: show only requests from user's department
       deptOnly = false,
       userDept = '',
-      sortOrder = 'desc'
+      sortOrder = 'desc',
+      excludeRejected = false
     } = req.query;
     const { user, delegatedUser } = req;
     // For data filtering: use the actual logged-in user, not the delegated user
@@ -790,6 +791,15 @@ const getAllPermohonan = async (req, res) => {
         // Completed: only keep if BAP exists and is NOT yet Completed
         const bapStatus = itemData.BeritaAcara?.status || null;
         return bapStatus !== null && bapStatus !== 'Completed';
+      });
+      filteredCount = filteredList.length;
+    }
+
+    // Exclude Rejected permohonan for Dept. Requests tab
+    if (excludeRejected === 'true' || excludeRejected === true) {
+      filteredList = filteredList.filter(request => {
+        const itemData = request.toJSON ? request.toJSON() : request;
+        return itemData.status !== 'Rejected';
       });
       filteredCount = filteredList.length;
     }
