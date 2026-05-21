@@ -122,9 +122,24 @@ const checkUserCanApproveRequest = async (userId, request) => {
       return false;
     }
     
-    // Step 3: Verification - any user with step 3 authority can approve
+    // Step 3: Verification (Verifikasi Lapangan)
+    // KL dept users can verify ALL requests.
+    // Non-KL dept users (e.g. Dept AM as requestor representative) can only
+    // verify requests from their own department.
     if (currentStepLevel === 3) {
-      return userApprovals.some(a => a.Appr_No === 3) || isPJKPO;
+      const step3Approvals = userApprovals.filter(a => a.Appr_No === 3);
+      if (step3Approvals.length === 0 && !isPJKPO) return false;
+      if (isPJKPO) return true;
+
+      const hasKLAuthority = step3Approvals.some(
+        a => (a.Appr_DeptID || '').toString().toUpperCase() === 'KL'
+      );
+      if (hasKLAuthority) return true;
+
+      // Non-KL verifikasi role: must match the request's department
+      const userStep3Depts = step3Approvals.map(a => (a.Appr_DeptID || '').toString().toUpperCase());
+      const reqDept = String(request.bagian || request.requester_dept_id || '').toUpperCase();
+      return reqDept ? userStep3Depts.includes(reqDept) : false;
     }
     
     // Step 4: HSE Manager - any user with step 4 authority can approve
