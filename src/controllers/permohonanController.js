@@ -306,7 +306,8 @@ const getAllPermohonan = async (req, res) => {
       deptOnly = false,
       userDept = '',
       sortOrder = 'desc',
-      excludeRejected = false
+      excludeRejected = false,
+      requestNumberView = 'all'
     } = req.query;
     const { user, delegatedUser } = req;
     // For data filtering: use the actual logged-in user, not the delegated user
@@ -334,7 +335,24 @@ const getAllPermohonan = async (req, res) => {
       // Search in a specific column using explicit if-else conditions
       // Only columns that can be safely queried at DB level
       if (column === 'noPermohonan') {
-        whereClause.nomor_permohonan = searchCondition;
+        if (requestNumberView === 'draft') {
+          whereClause = Sequelize.where(
+            Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.request_id'), 'TEXT'),
+            searchCondition
+          );
+        } else if (requestNumberView === 'registered') {
+          whereClause.nomor_permohonan = searchCondition;
+        } else {
+          whereClause = {
+            [Op.or]: [
+              { nomor_permohonan: searchCondition },
+              Sequelize.where(
+                Sequelize.cast(Sequelize.col('PermohonanPemusnahanLimbah.request_id'), 'TEXT'),
+                searchCondition
+              )
+            ]
+          };
+        }
       } else if (column === 'tanggal') {
         // For tanggal search, create OR conditions for multiple date formats
         const dateSearchConditions = [
@@ -435,6 +453,25 @@ const getAllPermohonan = async (req, res) => {
     // For verification tab: show only InProgress requests at verification step (step 3)
     if (isVerificationOnly) {
       whereClause.status = 'InProgress';
+    }
+
+    // Filter rows by whether they still use the generated draft/request ID
+    // or already have a formal nomor_permohonan.
+    if (requestNumberView === 'draft' || requestNumberView === 'registered') {
+      const requestNumberCondition = requestNumberView === 'draft'
+        ? { nomor_permohonan: { [Op.is]: null } }
+        : { nomor_permohonan: { [Op.not]: null } };
+
+      if (hasWhereConditions(whereClause)) {
+        whereClause = {
+          [Op.and]: [
+            whereClause,
+            requestNumberCondition
+          ]
+        };
+      } else {
+        whereClause = requestNumberCondition;
+      }
     }
 
     const queryOptions = {
