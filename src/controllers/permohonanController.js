@@ -474,6 +474,25 @@ const getAllPermohonan = async (req, res) => {
       }
     }
 
+    const requestNumberOrder = (() => {
+      const direction = sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+      if (requestNumberView === 'draft') {
+        return [[Sequelize.col('PermohonanPemusnahanLimbah.request_id'), direction]];
+      }
+
+      if (requestNumberView === 'registered') {
+        return [
+          [Sequelize.literal('CAST(SUBSTRING("PermohonanPemusnahanLimbah"."nomor_permohonan" FROM 1 FOR 5) AS INTEGER)'), direction]
+        ];
+      }
+
+      return [
+        [Sequelize.literal('CASE WHEN "PermohonanPemusnahanLimbah"."nomor_permohonan" IS NULL THEN 0 ELSE 1 END'), 'ASC'],
+        [Sequelize.literal('COALESCE(CAST(SUBSTRING("PermohonanPemusnahanLimbah"."nomor_permohonan" FROM 1 FOR 5) AS INTEGER), "PermohonanPemusnahanLimbah"."request_id")'), direction]
+      ];
+    })();
+
     const queryOptions = {
       include: [
         { model: DetailLimbah, required: false },
@@ -485,11 +504,7 @@ const getAllPermohonan = async (req, res) => {
       ],
       limit: parseInt(limit),
       offset: offset,
-      // Sort by first 5 digits of nomor_permohonan, NULL first, direction from query param
-      order: [
-        [Sequelize.literal("CASE WHEN nomor_permohonan IS NULL THEN 0 ELSE 1 END"), 'ASC'],
-        [Sequelize.literal("CAST(SUBSTRING(nomor_permohonan FROM 1 FOR 5) AS INTEGER)"), sortOrder === 'asc' ? 'ASC' : 'DESC']
-      ],
+      order: requestNumberOrder,
       where: whereClause,
       distinct: true  // Ensure count is based on unique PermohonanPemusnahanLimbah records
     };
