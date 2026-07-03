@@ -757,8 +757,10 @@ const generateLogbookExcel = async (req, res) => {
             order: [['nama', 'ASC']]
         });
 
-        // --- Get permohonan data with status Completed ---
-        const permohonanWhere = { status: 'Completed' };
+        // --- Get permohonan data from after field verification through completion ---
+        const permohonanWhere = {
+            status: { [require('sequelize').Op.in]: ['InProgress', 'Pembuatan BAP', 'Completed'] }
+        };
         const golonganInclude = golonganNameFilter
             ? { model: GolonganLimbah, where: { nama: { [require('sequelize').Op.in]: golonganNameFilter } } }
             : { model: GolonganLimbah };
@@ -769,6 +771,11 @@ const generateLogbookExcel = async (req, res) => {
                 { model: DetailLimbah },
                 golonganInclude,
                 { model: JenisLimbahB3 },
+                {
+                    model: ApprovalWorkflowStep,
+                    as: 'CurrentStep',
+                    required: false
+                },
                 { 
                     model: ApprovalHistory,
                     include: [{ model: ApprovalWorkflowStep }],
@@ -777,27 +784,57 @@ const generateLogbookExcel = async (req, res) => {
             ]
         });
 
-        // Filter based on verification date
-        const permohonanData = allPermohonanData.filter(permohonan => {
+        const getCompletedVerificationApprovals = (permohonan) => {
             if (!permohonan.ApprovalHistories || permohonan.ApprovalHistories.length === 0) {
-                return false;
+                return [];
             }
-            
-            const verificationApprovals = permohonan.ApprovalHistories.filter(
-                h => h.status === 'Approved' && 
-                     h.decision_date && 
-                     h.approver_jabatan && 
+
+            return permohonan.ApprovalHistories.filter(
+                h => h.status === 'Approved' &&
+                     h.decision_date &&
+                     h.approver_jabatan &&
                      h.approver_jabatan.includes('VERIF_ROLE')
             );
-            
+        };
+
+        const hasCompletedAllVerificationRoles = (permohonan) => {
+            const verificationApprovals = getCompletedVerificationApprovals(permohonan);
+            const requiredRoles = [1, 2, 3, 4];
+            return requiredRoles.every(role =>
+                verificationApprovals.some(h => h.approver_jabatan.includes(`VERIF_ROLE:${role}`))
+            );
+        };
+
+        const getVerificationCompletionDate = (permohonan) => {
+            const verificationApprovals = getCompletedVerificationApprovals(permohonan);
             if (verificationApprovals.length === 0) {
+                return null;
+            }
+
+            const latestVerification = verificationApprovals
+                .sort((a, b) => new Date(b.decision_date) - new Date(a.decision_date))[0];
+
+            return latestVerification ? new Date(latestVerification.decision_date) : null;
+        };
+
+        // Filter based on completed field verification date.
+        // Include the lifecycle from waiting HSE Manager approval until completed.
+        const permohonanData = allPermohonanData.filter(permohonan => {
+            if (!hasCompletedAllVerificationRoles(permohonan)) {
                 return false;
             }
-            
-            return verificationApprovals.some(approval => {
-                const decisionDate = new Date(approval.decision_date);
-                return decisionDate >= startDate && decisionDate <= endDate;
-            });
+
+            const status = permohonan.status;
+            const isWaitingHseManager = status === 'InProgress' && permohonan.CurrentStep?.step_level === 4;
+            const isAfterHseManager = status === 'Pembuatan BAP' || status === 'Completed';
+            if (!isWaitingHseManager && !isAfterHseManager) {
+                return false;
+            }
+
+            const verificationCompletionDate = getVerificationCompletionDate(permohonan);
+            return verificationCompletionDate &&
+                   verificationCompletionDate >= startDate &&
+                   verificationCompletionDate <= endDate;
         });
 
         // --- Sort permohonan by first 5 digits of nomor_permohonan (ascending) ---
