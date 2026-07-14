@@ -6,6 +6,7 @@ const DEVLOGGER_API_BASE_URL =
 const APP_NAME = process.env.DEVLOGGER_APP_NAME || 'ePemusnahan Limbah BE';
 const APP_ENV = process.env.NODE_ENV || 'development';
 const TIMEOUT_MS = Number(process.env.DEVLOGGER_TIMEOUT_MS || 15000);
+const DEVMODE_ENABLED = String(process.env.DEVLOGGER_DEVMODE || '').toLowerCase() === 'true';
 
 const getTokenFromRequest = (req) => {
   const authorization = req.headers.authorization || req.headers.Authorization || '';
@@ -80,7 +81,7 @@ const reportBackendError = async (error, req, context = {}) => {
   if (!DEVLOGGER_API_BASE_URL || !req) return null;
 
   const token = getTokenFromRequest(req);
-  const url = `${DEVLOGGER_API_BASE_URL.replace(/\/+$/, '')}/errors/report`;
+  const url = `${DEVLOGGER_API_BASE_URL.replace(/\/+$/, '')}/errors/report${DEVMODE_ENABLED ? '?devmode=true' : ''}`;
   const payload = buildReportPayload(error, req, context);
 
   try {
