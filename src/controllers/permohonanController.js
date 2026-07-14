@@ -21,6 +21,7 @@ const {
   hasUserProcessedCurrentStep
 } = require('../services/approvalAuthorizationService');
 const { sendApprovalStep2Notification } = require('../utils/emailService');
+const { sendLoggedErrorResponse } = require('../utils/devLoggerService');
 
 // --- Helper Function for External API Authorization ---
 const checkApprovalAuthorization = async (authorizingUser, permohonan) => {
@@ -275,7 +276,12 @@ const createPermohonan = async (req, res) => {
   } catch (error) {
     await transaction.rollback();
     console.error("Failed to create permohonan:", error);
-    res.status(500).json({ message: "Error creating permohonan", error: error.message });
+    return sendLoggedErrorResponse(res, error, req, {
+      message: "Error creating permohonan",
+      module: 'Permohonan',
+      operation: 'createPermohonan',
+      severity: 'ERROR'
+    });
   }
 };
 
@@ -1261,7 +1267,12 @@ const submitPermohonan = async (req, res) => {
   } catch (error) {
     await transaction.rollback();
     console.error("Failed to submit permohonan:", error);
-    res.status(500).json({ message: "Error submitting permohonan", error: error.message });
+    return sendLoggedErrorResponse(res, error, req, {
+      message: "Error submitting permohonan",
+      module: 'Permohonan',
+      operation: 'submitPermohonan',
+      severity: 'ERROR'
+    });
   }
 };
 
@@ -1796,7 +1807,12 @@ const approvePermohonan = async (req, res) => {
   } catch (error) {
     await transaction.rollback();
     console.error("Failed to approve permohonan:", error);
-    res.status(500).json({ message: "Error approving permohonan", error: error.message });
+    return sendLoggedErrorResponse(res, error, req, {
+      message: "Error approving permohonan",
+      module: 'Approval Permohonan',
+      operation: 'approvePermohonan',
+      severity: 'ERROR'
+    });
   }
 };
 
@@ -1991,7 +2007,12 @@ const rejectPermohonan = async (req, res) => {
   } catch (error) {
     await transaction.rollback();
     console.error("Failed to reject permohonan:", error);
-    res.status(500).json({ message: "Error rejecting permohonan", error: error.message });
+    return sendLoggedErrorResponse(res, error, req, {
+      message: "Error rejecting permohonan",
+      module: 'Approval Permohonan',
+      operation: 'rejectPermohonan',
+      severity: 'ERROR'
+    });
   }
 };
 
@@ -2122,7 +2143,12 @@ const updatePermohonan = async (req, res) => {
   } catch (error) {
     await transaction.rollback();
     console.error("Failed to update permohonan:", error);
-    res.status(500).json({ message: "Error updating permohonan", error: error.message });
+    return sendLoggedErrorResponse(res, error, req, {
+      message: "Error updating permohonan",
+      module: 'Permohonan',
+      operation: 'updatePermohonan',
+      severity: 'ERROR'
+    });
   }
 };
 
@@ -2185,7 +2211,12 @@ const deletePermohonan = async (req, res) => {
   } catch (error) {
     await transaction.rollback();
     console.error("Failed to delete permohonan:", error);
-    res.status(500).json({ message: "Error deleting permohonan", error: error.message });
+    return sendLoggedErrorResponse(res, error, req, {
+      message: "Error deleting permohonan",
+      module: 'Permohonan',
+      operation: 'deletePermohonan',
+      severity: 'ERROR'
+    });
   }
 };
 

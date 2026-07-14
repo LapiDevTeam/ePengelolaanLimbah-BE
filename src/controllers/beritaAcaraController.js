@@ -25,6 +25,7 @@ const { getWorkflowNamesByGroup, getGolonganNamesByGroup, GOLONGAN_GROUP_MAP } =
 
 const { determineSigningWorkflow } = require("./workflowController");
 const { sendBapSigningNotification } = require("../utils/emailService");
+const { sendLoggedErrorResponse } = require("../utils/devLoggerService");
 
 // --- Helper Function for External API Authorization ---
 // This is consistent with checkApprovalAuthorization in permohonanController but adapted for signing workflow
@@ -787,7 +788,12 @@ const createBeritaAcara = async (req, res) => {
       console.error("Failed to create Berita Acara (and failed to serialize error):", error, logErr);
     }
 
-    res.status(500).json({ message: "Error creating Berita Acara", error: error.message });
+    return sendLoggedErrorResponse(res, error, req, {
+      message: "Error creating Berita Acara",
+      module: 'Berita Acara',
+      operation: 'createBeritaAcara',
+      severity: 'ERROR'
+    });
   }
 };
 
@@ -1843,7 +1849,12 @@ const signBeritaAcara = async (req, res) => {
     res.status(200).json({ success: true, message, data: refreshedEvent });
   } catch (error) {
     await transaction.rollback();
-    res.status(500).json({ message: "Error signing Berita Acara", error: error.message });
+    return sendLoggedErrorResponse(res, error, req, {
+      message: "Error signing Berita Acara",
+      module: 'Berita Acara',
+      operation: 'signBeritaAcara',
+      severity: 'ERROR'
+    });
   }
 };
 
