@@ -6,7 +6,7 @@ module.exports = (sequelize, DataTypes) => {
     nomor_analisa: DataTypes.TEXT,
     nomor_referensi: DataTypes.TEXT,
     nomor_wadah: DataTypes.INTEGER,
-    jumlah_barang: DataTypes.INTEGER,
+    jumlah_barang: DataTypes.DECIMAL(10, 2),
     satuan: { type: DataTypes.TEXT, allowNull: false },
     bobot: { type: DataTypes.DECIMAL(10, 2), allowNull: false },
     alasan_pemusnahan: { type: DataTypes.TEXT, allowNull: false },

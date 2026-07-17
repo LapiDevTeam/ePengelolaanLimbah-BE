@@ -147,7 +147,7 @@ exports.up = async (pgm) => {
         nomor_analisa: { type: 'text' },
         nomor_referensi: { type: 'text' },
         nomor_wadah: { type: 'integer' },
-        jumlah_barang: { type: 'integer' },
+        jumlah_barang: { type: 'decimal(10, 2)' },
         satuan: { type: 'text', notNull: true },
         bobot: { type: 'decimal(10, 2)', notNull: true },
         alasan_pemusnahan: { type: 'text', notNull: true },

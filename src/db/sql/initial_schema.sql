@@ -136,7 +136,7 @@ CREATE TABLE detail_limbah (
     nomor_analisa TEXT,
     nomor_referensi TEXT,
     nomor_wadah INTEGER,
-    jumlah_barang INTEGER,
+    jumlah_barang NUMERIC(10, 2),
     satuan TEXT NOT NULL,
     bobot NUMERIC(10, 2) NOT NULL,
     alasan_pemusnahan TEXT NOT NULL
