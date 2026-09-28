@@ -837,11 +837,15 @@ const generateLogbookExcel = async (req, res) => {
                    verificationCompletionDate <= endDate;
         });
 
-        // --- Sort permohonan by first 5 digits of nomor_permohonan (ascending) ---
+        // --- Sort permohonan by verification/destruction completion date (ascending) ---
+        // Note: nomor_permohonan is assigned earlier in the workflow (at Dept Manager/APJ
+        // approval) while tanggal_pemusnahan reflects the later field verification
+        // completion date, so sorting by nomor_permohonan does not yield chronological
+        // date order in the "Tanggal Pemusnahan" column.
         permohonanData.sort((a, b) => {
-            const numA = parseInt((a.nomor_permohonan || '').substring(0, 5)) || 0;
-            const numB = parseInt((b.nomor_permohonan || '').substring(0, 5)) || 0;
-            return numA - numB;
+            const dateA = getVerificationCompletionDate(a);
+            const dateB = getVerificationCompletionDate(b);
+            return (dateA ? dateA.getTime() : 0) - (dateB ? dateB.getTime() : 0);
         });
 
         // --- Helper function to get verification date ---
