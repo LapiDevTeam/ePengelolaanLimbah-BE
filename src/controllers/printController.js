@@ -293,18 +293,7 @@ class PrintController {
         `,
       });
 
-      // Determine revisi berdasarkan createdAt
-      const createdDate = new Date(createdAt);
-
-      // Format tanggal ke DD/MM/YYYY
-      const formattedDate = createdDate.toLocaleDateString("id-ID", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-      });
-
-      const revisi = "01";
-      const kode = "FO.KL.000043";
+      const kode = "PK.KL.000035.13.T01";
 
       // Generate PDF
       const pdfBuffer = await page.pdf({
@@ -330,20 +319,22 @@ class PrintController {
 
         // Footer template
         footerTemplate: `
-          <table style="width: 85%; margin: 0 auto; font-size: 11px; border: 1px solid black; border-collapse: collapse; font-family: Verdana, sans-serif; table-layout: fixed;">
-            <tr>
-              <td style="border: 1px solid black; width: 12%; text-align: center; padding: 4px;">Nomor</td>
-              <td style="border: 1px solid black; width: 15%; text-align: center; padding: 4px;">${kode}</td>
-              <td style="border: 1px solid black; width: 12%; text-align: center; padding: 4px;">Tanggal</td>
-              <td style="border: 1px solid black; width: 15%; text-align: center; padding: 4px;">${formattedDate}</td>
-              <td style="border: 1px solid black; width: 10%; text-align: center; padding: 4px;">Revisi</td>
-              <td style="border: 1px solid black; width: 8%; text-align: center; padding: 4px;">${revisi}</td>
-              <td style="border: 1px solid black; width: 12%; text-align: center; padding: 4px;">Halaman</td>
-              <td style="border: 1px solid black; width: 16%; text-align: center; padding: 4px;">
-                <span class="pageNumber"></span> dari <span class="totalPages"></span>
-              </td>
-            </tr>
-          </table>
+          <div style="width: 85%; margin: 0 auto; display: flex; justify-content: space-between; font-family: Verdana, sans-serif;">
+            <table style="font-size: 11px; border: 1px solid black; border-collapse: collapse; table-layout: fixed;">
+              <tr>
+                <td style="border: 1px solid black; text-align: center; padding: 4px 8px;">Nomor</td>
+                <td style="border: 1px solid black; text-align: center; padding: 4px 8px;">${kode}</td>
+              </tr>
+            </table>
+            <table style="font-size: 11px; border: 1px solid black; border-collapse: collapse; table-layout: fixed;">
+              <tr>
+                <td style="border: 1px solid black; text-align: center; padding: 4px 8px;">Halaman</td>
+                <td style="border: 1px solid black; text-align: center; padding: 4px 8px;">
+                  <span class="pageNumber"></span> dari <span class="totalPages"></span>
+                </td>
+              </tr>
+            </table>
+          </div>
         `,
 
         // Margins
@@ -646,18 +637,7 @@ class PrintController {
         `,
       });
 
-      // Determine revisi berdasarkan createdAt
-      const createdDate = new Date(createdAt);
-
-      // Format tanggal ke DD/MM/YYYY
-      const formattedDate = createdDate.toLocaleDateString("id-ID", {
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-      });
-
-      const revisi = "01";
-      const kode = "FO.KL.000041";
+      const kode = "PK.KL.000035.13.T02";
 
       // Generate PDF
       const pdfBuffer = await page.pdf({
@@ -683,20 +663,22 @@ class PrintController {
 
         // Footer template
         footerTemplate: `
-          <table style="width: 85%; margin: 0 auto; font-size: 11px; border: 1px solid black; border-collapse: collapse; font-family: Verdana, sans-serif; table-layout: fixed;">
-            <tr>
-              <td style="border: 1px solid black; width: 12%; text-align: center; padding: 4px;">Nomor</td>
-              <td style="border: 1px solid black; width: 15%; text-align: center; padding: 4px;">${kode}</td>
-              <td style="border: 1px solid black; width: 12%; text-align: center; padding: 4px;">Tanggal</td>
-              <td style="border: 1px solid black; width: 15%; text-align: center; padding: 4px;">${formattedDate}</td>
-              <td style="border: 1px solid black; width: 10%; text-align: center; padding: 4px;">Revisi</td>
-              <td style="border: 1px solid black; width: 8%; text-align: center; padding: 4px;">${revisi}</td>
-              <td style="border: 1px solid black; width: 12%; text-align: center; padding: 4px;">Halaman</td>
-              <td style="border: 1px solid black; width: 16%; text-align: center; padding: 4px;">
-                <span class="pageNumber"></span> dari <span class="totalPages"></span>
-              </td>
-            </tr>
-          </table>
+          <div style="width: 85%; margin: 0 auto; display: flex; justify-content: space-between; font-family: Verdana, sans-serif;">
+            <table style="font-size: 11px; border: 1px solid black; border-collapse: collapse; table-layout: fixed;">
+              <tr>
+                <td style="border: 1px solid black; text-align: center; padding: 4px 8px;">Nomor</td>
+                <td style="border: 1px solid black; text-align: center; padding: 4px 8px;">${kode}</td>
+              </tr>
+            </table>
+            <table style="font-size: 11px; border: 1px solid black; border-collapse: collapse; table-layout: fixed;">
+              <tr>
+                <td style="border: 1px solid black; text-align: center; padding: 4px 8px;">Halaman</td>
+                <td style="border: 1px solid black; text-align: center; padding: 4px 8px;">
+                  <span class="pageNumber"></span> dari <span class="totalPages"></span>
+                </td>
+              </tr>
+            </table>
+          </div>
         `,
 
         // Margins
