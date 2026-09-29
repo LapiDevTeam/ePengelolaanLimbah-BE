@@ -287,49 +287,58 @@ const getBeritaAcaraDataForDoc = async (req, res) => {
             return res.status(404).json({ message: 'Berita Acara not found' });
         }
 
-        // --- Find the latest signing timestamp ---
+        // --- Find the latest signing timestamp (fallback when no field verification is found) ---
         const signingTimestamps = beritaAcara.SigningHistories
             .filter(h => h.signed_at)
             .map(h => new Date(h.signed_at).getTime());
-        
+
         const latestSigningTimestamp = signingTimestamps.length > 0
             ? new Date(Math.max(...signingTimestamps))
             : new Date(jakartaTime.nowJakarta()); // Fallback to Jakarta now if no signatures found
 
-        // --- NEW: Format date and time strings separately ---
-
         // Options for formatting the date (e.g., "Jumat, 26 September 2025")
         // We specify 'id-ID' for Indonesian format and 'Asia/Jakarta' for the timezone.
-        const dateOptions = { 
-            weekday: 'long', 
-            year: 'numeric', 
-            month: 'long', 
+        const dateOptions = {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
             day: 'numeric',
             timeZone: 'Asia/Jakarta'
         };
-        const hari_tanggal = new Intl.DateTimeFormat('id-ID', dateOptions).format(latestSigningTimestamp);
 
         // Options for formatting the time (e.g., "17:00")
-        const timeOptions = { 
-            hour: '2-digit', 
-            minute: '2-digit', 
+        const timeOptions = {
+            hour: '2-digit',
+            minute: '2-digit',
             hour12: false,
             timeZone: 'Asia/Jakarta'
         };
-        
+
         // Helper function to format time as HH:mm
         const formatTime = (date) => {
             const hours = date.toLocaleString('en-US', { hour: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' });
             const minutes = date.toLocaleString('en-US', { minute: '2-digit', timeZone: 'Asia/Jakarta' });
             return `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`;
         };
-        
-        // --- NEW: Get verification time range from ApprovalHistory (Verifikasi Lapangan step) ---
+
+        // --- Get verification date/time range from ApprovalHistory (Verifikasi Lapangan step) ---
+        // "Hari/Tanggal" and "Jam/Waktu" both describe when the field verification actually
+        // took place, so they must come from the same source (the Verifikasi Lapangan approvals),
+        // not from the document's final signing timestamp which can land on a later day.
         // Collect all request IDs from the berita acara
         const requestIds = (beritaAcara.PermohonanPemusnahanLimbahs || []).map(p => p.request_id);
-        
+
+        // Prekursor/OOT requests can bundle a date range of field verifications; B3 and
+        // Recall requests are always verified in a single session, so they stay a single date.
+        const isPrekursorBAP = (beritaAcara.PermohonanPemusnahanLimbahs || []).some(
+            p => determineGroupFromGolongan(p.GolonganLimbah?.nama) === 'recall-precursor'
+        );
+
         let jam_waktu = '';
-        
+        let verificationDate = null;
+        let verificationEarliestTime = null;
+        let verificationLatestTime = null;
+
         if (requestIds.length > 0) {
             // Fetch all approval histories for Verifikasi Lapangan step across all linked requests
             const verificationHistories = await ApprovalHistory.findAll({
@@ -364,15 +373,36 @@ const getBeritaAcaraDataForDoc = async (req, res) => {
                     } else {
                         jam_waktu = `${startTime} - ${endTime}`;
                     }
+
+                    // Use the most recent Verifikasi Lapangan approval as the reference date.
+                    verificationDate = latestTime;
+                    verificationEarliestTime = earliestTime;
+                    verificationLatestTime = latestTime;
                 }
             }
         }
-        
-        // Fallback to latest signing timestamp if no verification time found
+
+        // Fallback to latest signing timestamp if no verification time/date found
         if (!jam_waktu) {
             jam_waktu = formatTime(latestSigningTimestamp);
         }
-        
+
+        // Jakarta calendar-day key (YYYY-MM-DD) used to tell whether the earliest and latest
+        // verification approvals fall on different days.
+        const jakartaDayKey = (date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
+
+        const fullDateFormatter = new Intl.DateTimeFormat('id-ID', dateOptions);
+        let hari_tanggal;
+        if (
+            isPrekursorBAP &&
+            verificationEarliestTime &&
+            verificationLatestTime &&
+            jakartaDayKey(verificationEarliestTime) !== jakartaDayKey(verificationLatestTime)
+        ) {
+            hari_tanggal = `${fullDateFormatter.format(verificationEarliestTime)} - ${fullDateFormatter.format(verificationLatestTime)}`;
+        } else {
+            hari_tanggal = fullDateFormatter.format(verificationDate || latestSigningTimestamp);
+        }
 
         // --- Create a detailed list for each linked Permohonan ---
         const sortedPermohonanList = (beritaAcara.PermohonanPemusnahanLimbahs || []).slice().sort((a, b) => {
