@@ -768,7 +768,10 @@ const generateLogbookExcel = async (req, res) => {
         const allPermohonanData = await PermohonanPemusnahanLimbah.findAll({
             where: permohonanWhere,
             include: [
-                { model: DetailLimbah },
+                // DetailLimbah and ApprovalHistory are both hasMany; joining them together
+                // in one query multiplies rows (detail_count x approval_count per permohonan).
+                // `separate: true` fetches each via its own query instead, avoiding that blow-up.
+                { model: DetailLimbah, separate: true },
                 golonganInclude,
                 { model: JenisLimbahB3 },
                 {
@@ -776,10 +779,11 @@ const generateLogbookExcel = async (req, res) => {
                     as: 'CurrentStep',
                     required: false
                 },
-                { 
+                {
                     model: ApprovalHistory,
                     include: [{ model: ApprovalWorkflowStep }],
-                    required: false
+                    required: false,
+                    separate: true
                 }
             ]
         });
@@ -875,26 +879,71 @@ const generateLogbookExcel = async (req, res) => {
             return '';
         };
 
-        // --- Group permohonan by kode (first token of jenis limbah name) ---
+        // --- Display name per kode for the Total sheet's "Jenis Limbah" column. ---
+        // Curated from the app's own jenis limbah data (not the kode limbah SOP doc,
+        // which is only used for document numbering elsewhere).
+        const KODE_JENIS_DISPLAY_MAP = {
+            'A102d': 'Aki/Baterai bekas',
+            'A106d': 'Limbah laboratorium',
+            'A108d': 'Limbah terkontaminasi B3',
+            'A336-1': 'Bahan atau Produk yang tidak memenuhi spesifikasi teknis, kedaluwarsa, dan sisa (Farmasi)',
+            'A336-2': 'Residu proses produksi dan formulasi',
+            'B104d': 'Kemasan bekas B3',
+            'B105d': 'Minyak pelumas',
+            'B109d': 'Filter dan Prefilter',
+            'B110d': 'Kain majun dan sejenisnya',
+            'B336-2': 'Sludge dari IPAL',
+            'B353-1': 'Cartridge'
+        };
+
+        const getLogbookGroupInfo = (jenisLimbahRaw) => {
+            const kodeMatch = jenisLimbahRaw.match(/^(\S+)(?:\s+(.*))?$/);
+            const kode = kodeMatch ? kodeMatch[1] : jenisLimbahRaw;
+            const subjenisName = kodeMatch?.[2]?.trim() || null;
+
+            // B107d is split into its own sheet per subjenis (e.g. Lampu TL vs Elektronik).
+            if (kode === 'B107d' && subjenisName) {
+                return {
+                    key: `${kode} ${subjenisName}`,
+                    sheetName: `LIMBAH ${subjenisName.toUpperCase()} ${kode}`,
+                    titleName: subjenisName.toUpperCase(),
+                    jenisName: `Limbah ${subjenisName}`,
+                    kode
+                };
+            }
+
+            const safeKode = kode === 'Lain-lain' ? 'Lain-lain' : kode;
+            return {
+                key: safeKode,
+                sheetName: safeKode,
+                titleName: safeKode,
+                jenisName: KODE_JENIS_DISPLAY_MAP[safeKode] || subjenisName || safeKode,
+                kode: safeKode
+            };
+        };
+
+        // --- Group permohonan by kode, except B107d which is split by subjenis ---
         const groupedData = {};
-        
+
         permohonanData.forEach(permohonan => {
             const jenisLimbahRaw = permohonan.JenisLimbahB3?.nama || 'Tidak Diketahui';
-            // Extract kode as the first word/token. Example: "A336-1 Produk kembalian" -> kode "A336-1"
-            const kodeMatch = jenisLimbahRaw.match(/^(\S+)/);
-            const groupKey = kodeMatch ? kodeMatch[1] : jenisLimbahRaw;
-            // For Lain-lain, keep as a single bucket
-            const safeGroupKey = groupKey === 'Lain-lain' ? 'Lain-lain' : groupKey;
+            const groupInfo = getLogbookGroupInfo(jenisLimbahRaw);
 
-            if (!groupedData[safeGroupKey]) {
-                groupedData[safeGroupKey] = [];
+            if (!groupedData[groupInfo.key]) {
+                groupedData[groupInfo.key] = {
+                    sheetName: groupInfo.sheetName,
+                    titleName: groupInfo.titleName,
+                    jenisName: groupInfo.jenisName,
+                    kode: groupInfo.kode,
+                    rows: []
+                };
             }
-            
+
             const bobotTotal = permohonan.DetailLimbahs?.reduce((sum, detail) => {
                 return sum + (parseFloat(detail.bobot || 0) / 1000);
             }, 0) || 0;
-            
-            groupedData[safeGroupKey].push({
+
+            groupedData[groupInfo.key].rows.push({
                 tanggal_pemusnahan: getVerificationDate(permohonan),
                 no_permohonan: permohonan.nomor_permohonan,
                 jumlah_kg: bobotTotal,
@@ -942,13 +991,14 @@ const generateLogbookExcel = async (req, res) => {
         let sheetIndex = 1;
 
         Object.keys(groupedData).forEach((groupKey) => {
-            const data = groupedData[groupKey];
-            
-            // Sheet name uses kode (or Lain-lain)
-            const sheetDisplayName = groupKey;
+            const group = groupedData[groupKey];
+            const data = group.rows;
+
+            // Sheet name uses kode, except B107d which uses subjenis.
+            const sheetDisplayName = group.sheetName;
             // Create worksheet for this jenis limbah (sanitize sheet name)
             let sanitizedSheetName = sheetDisplayName.replace(/[\\\/\[\]:\*\?]/g, '').substring(0, 31);
-            
+
             // Prevent duplicate worksheet names, especially avoid "Total" which is reserved
             let finalSheetName = sanitizedSheetName;
             let counter = 1;
@@ -956,11 +1006,11 @@ const generateLogbookExcel = async (req, res) => {
                 finalSheetName = `${sanitizedSheetName}_${counter}`;
                 counter++;
             }
-            
+
             const worksheet = workbook.addWorksheet(finalSheetName);
-            
+
             // Add title row
-            const titleText = `Logbook ${sheetDisplayName}`;
+            const titleText = `Logbook ${group.titleName}`;
             worksheet.mergeCells('A1:H1'); // Merge cells for title (8 columns total)
             const titleCell = worksheet.getCell('A1');
             titleCell.value = titleText;
@@ -1016,16 +1066,11 @@ const generateLogbookExcel = async (req, res) => {
             const jenisBobot = data.reduce((sum, item) => sum + parseFloat(item.jumlah_kg || 0), 0);
             totalBobot += jenisBobot;
 
-            // Extract kode and jenis limbah name from the database value
-            // Format in database: "A336-1 Bahan Baku" -> kode: "A336-1", jenis: "Bahan Baku"
-            const kode = groupKey;
-            const jenisLimbahName = groupKey;
-
             // Add to total data
             totalData.push({
                 no: sheetIndex,
-                jenis_limbah: jenisLimbahName, // Use kode as name
-                kode: kode, // Kode as first token
+                jenis_limbah: group.jenisName,
+                kode: group.kode,
                 bobot: jenisBobot
             });
 
