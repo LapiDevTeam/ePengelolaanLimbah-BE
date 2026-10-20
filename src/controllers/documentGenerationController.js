@@ -1,3 +1,4 @@
+const path = require('path');
 const ExcelJS = require('exceljs');
 const axios = require('axios');
 const {
@@ -739,6 +740,289 @@ const generatePermohonanExcel = async (req, res) => {
     }
 };
 
+// Fixed Neraca rows, ordered as in the RINTEK TPS LB3 approval (Persetujuan RINTEK TPS PT. Lapi Laboratories).
+// `key` matches the logbook group key; B107d stays split into Elektronik and Lampu TL.
+const NERACA_ROWS = [
+    { key: 'A336-1', name: 'Bahan atau Produk yang tidak memenuhi spesifikasi teknis, kedaluwarsa, dan sisa (Farmasi)' },
+    { key: 'A106d', name: 'Limbah laboratorium' },
+    { key: 'B109d', name: 'Filter dan Prefilter' },
+    { key: 'A108d', name: 'Limbah terkontaminasi B3' },
+    { key: 'A336-2', name: 'Residu proses produksi dan formulasi' },
+    { key: 'A102d', name: 'Aki/Baterai bekas' },
+    { key: 'B104d', name: 'Kemasan bekas B3' },
+    { key: 'B353-1', name: 'Cartridge' },
+    { key: 'B105d', name: 'Minyak pelumas' },
+    { key: 'B107d Elektronik', name: 'Limbah Elektronik' },
+    { key: 'B107d Lampu TL', name: 'Limbah Lampu TL' },
+    { key: 'B110d', name: 'Kain majun dan sejenisnya' },
+    { key: 'B336-2', name: 'Sludge dari IPAL' }
+];
+
+const INDONESIAN_MONTHS = [
+    'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+    'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+];
+
+// 'YYYY-MM-DD' -> 'DD Bulan YYYY' (parsed manually to avoid timezone shifts)
+const formatIndonesianDate = (dateStr) => {
+    const [year, month, day] = dateStr.split('-').map(Number);
+    return `${String(day).padStart(2, '0')} ${INDONESIAN_MONTHS[month - 1]} ${year}`;
+};
+
+/**
+ * Builds the "Neraca Limbah B3" sheet for the logbook workbook.
+ * @param {ExcelJS.Workbook} workbook
+ * @param {Array<{groupKey: string, jenis_limbah: string, kode: string, bobot: number}>} totalRows - rows of the Total sheet (bobot in KG)
+ * @param {{start_date: string, end_date: string}} period
+ */
+const buildNeracaSheet = (workbook, totalRows, { start_date, end_date }) => {
+    const ws = workbook.addWorksheet('Neraca Limbah B3', {
+        pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+    });
+
+    // A+B = C = D = E+F so the four signature boxes are the same width
+    const signBoxWidth = 32;
+    [6, signBoxWidth - 6, signBoxWidth, signBoxWidth, signBoxWidth / 2, signBoxWidth / 2].forEach((width, index) => {
+        ws.getColumn(index + 1).width = width;
+    });
+
+    const thin = { style: 'thin', color: { argb: 'FF000000' } };
+    const allBorders = { top: thin, left: thin, bottom: thin, right: thin };
+    const greyFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' } };
+    const tonFmt = '0.00000';
+
+    const borderRange = (fromRow, toRow, fromCol, toCol) => {
+        for (let r = fromRow; r <= toRow; r++) {
+            for (let c = fromCol; c <= toCol; c++) {
+                ws.getRow(r).getCell(c).border = allBorders;
+            }
+        }
+    };
+
+    const setCell = (address, value, style = {}) => {
+        const cell = ws.getCell(address);
+        cell.value = value;
+        cell.font = { size: 10, ...style.font };
+        cell.alignment = { vertical: 'middle', wrapText: true, ...style.alignment };
+        if (style.fill) cell.fill = style.fill;
+        if (style.numFmt) cell.numFmt = style.numFmt;
+        return cell;
+    };
+    const center = { horizontal: 'center' };
+
+    // --- All Neraca rows are always shown; bobot comes from the Total sheet (0 if no data) ---
+    const bobotByKey = {};
+    totalRows.forEach(item => {
+        bobotByKey[item.groupKey] = (bobotByKey[item.groupKey] || 0) + (parseFloat(item.bobot) || 0);
+    });
+    const knownKeys = new Set(NERACA_ROWS.map(row => row.key));
+    const rows = [
+        ...NERACA_ROWS.map(row => ({ jenis_limbah: row.name, bobot: bobotByKey[row.key] || 0 })),
+        // Groups outside the RINTEK list (e.g. Lain-lain) are appended so TOTAL (A) still matches the Total sheet
+        ...totalRows
+            .filter(item => !knownKeys.has(item.groupKey))
+            .map(item => ({ jenis_limbah: item.jenis_limbah, bobot: parseFloat(item.bobot) || 0 }))
+    ];
+
+    // --- Header (rows 1-2): logo + title ---
+    ws.mergeCells('A1:B2');
+    // Logo is 2:1; rows sized so the merged A1:B2 area keeps roughly that ratio
+    ws.getRow(1).height = 55;
+    ws.getRow(2).height = 55;
+    try {
+        const logoId = workbook.addImage({
+            filename: path.join(__dirname, '..', 'logo_bnw.png'),
+            extension: 'png'
+        });
+        ws.addImage(logoId, { tl: { col: 0, row: 0 }, br: { col: 2, row: 2 }, editAs: 'oneCell' });
+    } catch (error) {
+        console.warn('Neraca Limbah B3: logo could not be loaded:', error.message);
+    }
+    ws.mergeCells('C1:F1');
+    setCell('C1', 'PT.LAPI LABORATORIES', { font: { bold: true, size: 16 }, alignment: center });
+    ws.mergeCells('C2:F2');
+    setCell('C2', 'NERACA LIMBAH B3', { font: { bold: true, size: 16 }, alignment: center });
+    borderRange(1, 2, 1, 6);
+
+    // --- Company info (rows 3-5) ---
+    const infoRows = [
+        ['Nama Perusahaan', 'PT.LAPI LABORATORIES'],
+        ['Bidang usaha', 'FARMASI'],
+        ['Periode waktu', `${formatIndonesianDate(start_date)} - ${formatIndonesianDate(end_date)}`]
+    ];
+    infoRows.forEach(([label, value], index) => {
+        const r = 3 + index;
+        ws.mergeCells(`A${r}:B${r}`);
+        setCell(`A${r}`, label, { alignment: center });
+        ws.mergeCells(`C${r}:F${r}`);
+        setCell(`C${r}`, value);
+    });
+    borderRange(3, 5, 1, 6);
+
+    // --- Section I: jenis awal limbah (row 6 header) ---
+    const sec1HeaderRow = 6;
+    ws.getRow(sec1HeaderRow).height = 30;
+    setCell(`A${sec1HeaderRow}`, 'I', { font: { bold: true }, alignment: center });
+    setCell(`B${sec1HeaderRow}`, 'JENIS  AWAL  LIMBAH', { font: { bold: true }, alignment: center });
+    setCell(`C${sec1HeaderRow}`, 'JUMLAH (TON)', { font: { bold: true }, alignment: center });
+
+    const firstDataRow = sec1HeaderRow + 1;
+    rows.forEach((item, index) => {
+        const r = firstDataRow + index;
+        setCell(`A${r}`, index + 1, { alignment: center });
+        const name = (item.jenis_limbah || '').toUpperCase();
+        setCell(`B${r}`, name);
+        // Merged/wrapped rows are not auto-fitted, so size long names explicitly
+        const lines = Math.ceil(name.length / (signBoxWidth - 9)) || 1;
+        ws.getRow(r).height = Math.max(18, lines * 14);
+        setCell(`C${r}`, (parseFloat(item.bobot) || 0) / 1000, { alignment: center, numFmt: tonFmt });
+    });
+    const lastDataRow = firstDataRow + rows.length - 1;
+
+    const totalA = rows.reduce((sum, item) => sum + (parseFloat(item.bobot) || 0) / 1000, 0);
+    const totalARow = firstDataRow + rows.length;
+    ws.mergeCells(`A${totalARow}:B${totalARow}`);
+    setCell(`A${totalARow}`, 'TOTAL (A)', { font: { bold: true }, alignment: center });
+    setCell(
+        `C${totalARow}`,
+        rows.length > 0 ? { formula: `SUM(C${firstDataRow}:C${lastDataRow})`, result: totalA } : 0,
+        { font: { bold: true }, alignment: center, numFmt: tonFmt }
+    );
+    const totalACell = `C${totalARow}`;
+
+    // CATATAN block to the right of section I (filled manually)
+    ws.mergeCells(`D${sec1HeaderRow}:F${totalARow}`);
+    setCell(
+        `D${sec1HeaderRow}`,
+        'CATATAN :\nPP Nomor :\nTanggal pengangkutan :\n\n\nPlat nomor kendaraan :',
+        { font: { italic: true, size: 11 }, alignment: { vertical: 'top', horizontal: 'left' } }
+    );
+    borderRange(sec1HeaderRow, totalARow, 1, 6);
+
+    // --- Separator row ---
+    const sepRow = totalARow + 1;
+    for (let c = 1; c <= 6; c++) ws.getRow(sepRow).getCell(c).fill = greyFill;
+    borderRange(sepRow, sepRow, 1, 6);
+
+    // --- Section II: perlakuan ---
+    const sec2Top = sepRow + 1;
+    const sec2Sub = sec2Top + 1;
+    ['A', 'B', 'C', 'D'].forEach(col => ws.mergeCells(`${col}${sec2Top}:${col}${sec2Sub}`));
+    setCell(`A${sec2Top}`, 'II', { font: { bold: true }, alignment: center });
+    setCell(`B${sec2Top}`, 'PERLAKUAN:', { font: { bold: true }, alignment: center });
+    setCell(`C${sec2Top}`, 'JUMLAH (TON)', { font: { bold: true }, alignment: center });
+    setCell(`D${sec2Top}`, 'JENIS LIMBAH YANG DIKELOLA', { font: { bold: true }, alignment: center });
+    ws.mergeCells(`E${sec2Top}:F${sec2Top}`);
+    setCell(`E${sec2Top}`, 'PERSETUJUAN LINGKUNGAN', { font: { bold: true }, alignment: center });
+    setCell(`E${sec2Sub}`, 'ADA', { font: { bold: true }, alignment: center });
+    setCell(`F${sec2Sub}`, 'TIDAK ADA', { font: { bold: true }, alignment: center });
+
+    const perlakuanList = [
+        { label: 'DISIMPAN', followsTotal: true },
+        { label: 'DIMANFAATKAN' },
+        { label: 'DIOLAH' },
+        { label: 'DITIMBUN' },
+        { label: 'DISERAHKAN KE PIHAK KETIGA', followsTotal: true },
+        { label: 'EKSPOR' },
+        { label: 'PERLAKUAN LAINNYA' }
+    ];
+    const firstPerlakuanRow = sec2Sub + 1;
+    let diserahkanCell = null;
+    perlakuanList.forEach((perlakuan, index) => {
+        const r = firstPerlakuanRow + index;
+        setCell(`A${r}`, index + 1, { alignment: center });
+        setCell(`B${r}`, perlakuan.label);
+        setCell(
+            `C${r}`,
+            perlakuan.followsTotal ? { formula: totalACell, result: totalA } : 0,
+            { alignment: center, numFmt: tonFmt }
+        );
+        setCell(`D${r}`, '-', { alignment: center });
+        if (perlakuan.label === 'DISERAHKAN KE PIHAK KETIGA') diserahkanCell = `C${r}`;
+    });
+
+    const totalBRow = firstPerlakuanRow + perlakuanList.length;
+    ws.mergeCells(`A${totalBRow}:B${totalBRow}`);
+    setCell(`A${totalBRow}`, 'TOTAL (B)', { font: { bold: true }, alignment: center });
+    setCell(`C${totalBRow}`, { formula: diserahkanCell, result: totalA }, { font: { bold: true }, alignment: center, numFmt: tonFmt });
+    setCell(`D${totalBRow}`, '-', { alignment: center });
+    ws.mergeCells(`E${totalBRow}:F${totalBRow}`);
+    setCell(`E${totalBRow}`, '-', { alignment: center });
+    ws.getRow(totalBRow).height = 24;
+    borderRange(sec2Top, totalBRow, 1, 6);
+
+    // --- Residu & sisa ---
+    const residuRow = totalBRow + 1;
+    const belumRow = residuRow + 1;
+    const sisaRow = belumRow + 1;
+    [
+        [residuRow, 'Residu (C)', 0],
+        [belumRow, 'JUMLAH LIMBAH YANG BELUM TERKELOLA (D)', 0],
+        [sisaRow, 'JUMLAH LIMBAH YANG TERSISA (C+D)', { formula: `C${residuRow}+C${belumRow}`, result: 0 }]
+    ].forEach(([r, label, value]) => {
+        ws.getRow(r).height = 30;
+        ws.mergeCells(`A${r}:B${r}`);
+        setCell(`A${r}`, label, { font: { bold: true }, fill: greyFill });
+        ws.mergeCells(`C${r}:F${r}`);
+        setCell(`C${r}`, value, { font: { bold: true }, alignment: center, numFmt: tonFmt, fill: greyFill });
+    });
+    borderRange(residuRow, sisaRow, 1, 6);
+
+    // --- Kinerja pengelolaan ---
+    const kinerjaRow = sisaRow + 1;
+    const fmt5 = (n) => n.toFixed(5);
+    ws.getRow(kinerjaRow).height = 36;
+    ws.mergeCells(`A${kinerjaRow}:B${kinerjaRow}`);
+    setCell(`A${kinerjaRow}`, 'KINERJA PENGELOLAAN LB3 SELAMA PERIODE\n(SKALA WAKTU PENAATAN)');
+    ws.mergeCells(`C${kinerjaRow}:D${kinerjaRow}`);
+    setCell(
+        `C${kinerjaRow}`,
+        `{(A-(C+D))/A} * 100%\n{[${fmt5(totalA)}-(0)]/${fmt5(totalA)}}*100%`,
+        { font: { bold: true, size: 9 } }
+    );
+    ws.mergeCells(`E${kinerjaRow}:F${kinerjaRow}`);
+    setCell(
+        `E${kinerjaRow}`,
+        {
+            formula: `IF(${totalACell}=0,0,(${totalACell}-C${sisaRow})/${totalACell})`,
+            result: totalA === 0 ? 0 : 1
+        },
+        { font: { bold: true }, alignment: center, numFmt: '0%' }
+    );
+    borderRange(kinerjaRow, kinerjaRow, 1, 6);
+
+    // --- Signature boxes ---
+    const signTop = kinerjaRow + 2;
+    const signBoxes = [
+        { from: 'A', to: 'B', title: 'YANG MENYERAHKAN', name: 'HSE SUPERVISIOR/OFFICER' },
+        { from: 'C', to: 'C', title: 'MENERIMA', name: '(.......................................)' },
+        { from: 'D', to: 'D', title: 'MENGAWASI', name: 'SATPAM' },
+        { from: 'E', to: 'F', title: 'MENGETAHUI', name: 'HSE MANAGER' }
+    ];
+    const signRows = { title: signTop, ttd: signTop + 1, space: signTop + 2, name: signTop + 3 };
+    ws.getRow(signRows.space).height = 50;
+    ws.getRow(signRows.name).height = 28;
+    signBoxes.forEach(box => {
+        Object.values(signRows).forEach(r => {
+            if (box.from !== box.to) ws.mergeCells(`${box.from}${r}:${box.to}${r}`);
+        });
+        setCell(`${box.from}${signRows.title}`, box.title, { alignment: center });
+        setCell(`${box.from}${signRows.ttd}`, 'TTD & TANGGAL', { font: { size: 8 } });
+        setCell(`${box.from}${signRows.name}`, box.name, { font: { size: 8 }, alignment: center });
+
+        const fromCol = ws.getColumn(box.from).number;
+        const toCol = ws.getColumn(box.to).number;
+        for (let c = fromCol; c <= toCol; c++) {
+            ws.getRow(signRows.title).getCell(c).border = allBorders;
+            ws.getRow(signRows.ttd).getCell(c).border = { left: c === fromCol ? thin : undefined, right: c === toCol ? thin : undefined };
+            ws.getRow(signRows.space).getCell(c).border = { left: c === fromCol ? thin : undefined, right: c === toCol ? thin : undefined };
+            ws.getRow(signRows.name).getCell(c).border = { left: c === fromCol ? thin : undefined, right: c === toCol ? thin : undefined, bottom: thin };
+        }
+    });
+
+    return ws;
+};
+
 /**
  * NEW FUNCTION
  * GET /api/document-generation/logbook/excel?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
@@ -1099,6 +1383,7 @@ const generateLogbookExcel = async (req, res) => {
             // Add to total data
             totalData.push({
                 no: sheetIndex,
+                groupKey,
                 jenis_limbah: group.jenisName,
                 kode: group.kode,
                 bobot: jenisBobot
@@ -1231,6 +1516,9 @@ const generateLogbookExcel = async (req, res) => {
             noDataRow.getCell(3).value = '';
             noDataRow.getCell(4).value = 0;
         }
+
+        // --- Create Neraca Limbah B3 sheet (rows from Total sheet, ordered per RINTEK) ---
+        buildNeracaSheet(workbook, totalData, { start_date, end_date });
 
         // --- Set response headers (exactly like generatePermohonanExcel) ---
         const startDateFormatted = start_date.replace(/-/g, '');
