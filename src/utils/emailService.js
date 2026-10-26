@@ -2,11 +2,19 @@ const nodemailer = require('nodemailer');
 
 // ============================================================
 // EMAIL CONFIG
-// Toggle TEST_MODE to switch between hardcoded test email
-// and real recipient emails from user API
+// Controlled via environment variables (see .env.example):
+//   EMAIL_TEST_MODE=true  -> kirim semua email ke EMAIL_TEST_TO saja
+//   EMAIL_TEST_MODE=false -> kirim ke email penerima asli dari user API
+//   LMS_LOGIN_URL         -> URL login LMS pada tombol di email
 // ============================================================
-const TEST_MODE = false; // true = kirim ke TEST_EMAIL, false = kirim ke email dari user API
-const TEST_EMAIL = 'thehascine@gmail.com'; // Ganti dengan email kamu untuk testing
+const TEST_MODE = process.env.EMAIL_TEST_MODE === 'true';
+const TEST_EMAIL = (process.env.EMAIL_TEST_TO || '').trim();
+const lmsLoginUrl = process.env.LMS_LOGIN_URL || 'http://192.168.1.24/lms/login';
+
+// Never logs SMTP credentials
+console.log(
+  `[EmailService] Mode: ${TEST_MODE ? `TEST -> ${TEST_EMAIL || '(EMAIL_TEST_TO kosong, email tidak akan dikirim)'}` : 'LIVE'} | LMS_LOGIN_URL: ${lmsLoginUrl}`
+);
 
 // Create reusable transporter
 const createTransporter = () => {
@@ -30,7 +38,7 @@ const createTransporter = () => {
 
 /**
  * Resolve recipient email(s) for next signer(s)
- * In TEST_MODE, always returns the hardcoded test email
+ * In TEST_MODE, always returns EMAIL_TEST_TO (or [] if it is not set)
  * Otherwise, looks up email from user API cache
  * 
  * @param {string[]} nikList - Array of NIK to find emails for
@@ -38,6 +46,11 @@ const createTransporter = () => {
  */
 const resolveEmails = async (nikList) => {
   if (TEST_MODE) {
+    if (!TEST_EMAIL) {
+      console.warn('[EmailService] EMAIL_TEST_MODE aktif tetapi EMAIL_TEST_TO kosong, email tidak dikirim');
+      return [];
+    }
+
     // Still resolve actual emails so we can log them for verification
     try {
       const { fetchUsersWithCache } = require('../controllers/userController');
@@ -155,7 +168,6 @@ const getNextSignerNiks = async (nextStepLevel, beritaAcara) => {
  */
 const buildBapEmailHtml = ({ beritaAcara, stepName, signerName, previousStepName }) => {
   const bapNomor = `BA-${String(beritaAcara.berita_acara_id).padStart(3, '0')}`;
-  const lmsLoginUrl = 'http://192.168.1.24/lms/login';
 
   return `
 <!DOCTYPE html>
@@ -312,7 +324,6 @@ const getStep2ApproverNiks = async ({ categoryName, isProdukPangan }) => {
  * Build HTML email for permohonan step 2 (APJ) approval notification.
  */
 const buildPermohonanStep2EmailHtml = ({ permohonan, approverName, golonganName }) => {
-  const lmsLoginUrl = 'http://192.168.1.24/lms/login';
   const nomorText = permohonan.nomor_permohonan || `Draft-${String(permohonan.request_id).padStart(3, '0')}`;
 
   return `
