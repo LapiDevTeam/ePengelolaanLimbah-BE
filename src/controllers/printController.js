@@ -293,7 +293,7 @@ class PrintController {
         `,
       });
 
-      const kode = "PK.KL.000035.13.T01";
+      const kode = "FO.KL.000043";
 
       // Generate PDF
       const pdfBuffer = await page.pdf({
@@ -637,7 +637,7 @@ class PrintController {
         `,
       });
 
-      const kode = "PK.KL.000035.13.T02";
+      const kode = "FO.KL.000041";
 
       // Generate PDF
       const pdfBuffer = await page.pdf({
